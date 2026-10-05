@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>FORGE</title>
+  <meta name="description" content="FORGE — build your body, track your strength, level up your muscles. A workout tracker made for one adjustable dumbbell.">
+  <meta name="theme-color" content="#0d0f12">
+  <meta name="color-scheme" content="dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="FORGE">
+  <meta name="application-name" content="FORGE">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="src/assets/icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="src/assets/icons/icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="src/assets/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="src/styles/main.css">
+  <link rel="modulepreload" href="src/main.js">
+</head>
+<body>
+  <div id="app" aria-live="polite">
+    <div style="min-height:100dvh;display:grid;place-items:center;color:#8a939f;font:600 13px/1 system-ui;letter-spacing:.3em">FORGE</div>
+  </div>
+  <nav id="nav" class="nav" aria-label="Main navigation" hidden></nav>
+  <div id="overlay-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <noscript><p style="padding:24px;color:#eceef1;font-family:system-ui">FORGE needs JavaScript to run.</p></noscript>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
