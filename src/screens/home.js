@@ -10,6 +10,7 @@ import { greeting, relativeDay } from '../utils/date.js';
 import { mapValues } from './shared.js';
 import { WEEKDAYS } from '../engine/plan.js';
 import { backupActions } from './backup.js';
+import { weekCard } from './week.js';
 
 export default {
   tab: 'home',
@@ -20,6 +21,8 @@ export default {
     'h-deload-end': async (ctx) => { await ctx.store.endDeload(); ctx.toast('Deload ended — back to normal training.'); },
     'h-backup-dismiss': (ctx) => ctx.store.saveSettings({ backupNudgeDismissed: Date.now() }),
     'bk-on': backupActions['bk-on'],
+    'h-week': async (ctx, el) => { await ctx.store.saveSettings({ weekCardSeen: Number(el.dataset.from) }); ctx.go('#/week?w=1'); },
+    'h-week-dismiss': (ctx, el) => ctx.store.saveSettings({ weekCardSeen: Number(el.dataset.from) }),
   },
   render(ctx) {
     const { store } = ctx;
@@ -85,6 +88,7 @@ export default {
       <header class="appbar"><div class="brand">${brandMark}<span class="brand-name">FORGE</span></div>
         <button class="icon-btn" data-action="go" data-href="#/settings" aria-label="Settings">${icon.gear}</button></header>
       ${hero}
+      ${weekCard(ctx)}
       ${deloadCard(ctx)}
       ${backupNudge(ctx)}
       <section class="section"><div class="section-head"><p class="eyebrow">Streak</p></div>${streakCard}</section>

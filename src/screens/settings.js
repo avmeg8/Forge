@@ -132,9 +132,10 @@ export default {
         <p class="small muted mt-8">A planned lighter week — fewer sets, a little less weight — after a block of hard training. Only weeks you train count.</p></section>
       <section class="section"><p class="eyebrow">Rest timer</p><div class="mt-8">${seg('st-rest', s.restMode, REST)}</div></section>
       <section class="section"><p class="eyebrow">Week starts on</p><div class="mt-8">${seg('st-week', s.weekStart, [[0, 'Sunday'], [1, 'Monday']])}</div></section>
-      <section class="section"><p class="eyebrow">Rest timer alerts</p><div class="card card--flush mt-8">
+      <section class="section"><p class="eyebrow">During workouts</p><div class="card card--flush mt-8">
         <div class="eq-row"><span class="grow item-title">Sound</span>${sw('st-sound', s.sound !== false, 'Sound')}</div>
-        <div class="eq-row"><span class="grow item-title">Vibration</span>${sw('st-vib', s.vibrate !== false, 'Vibration')}</div></div></section>
+        <div class="eq-row"><span class="grow item-title">Vibration</span>${sw('st-vib', s.vibrate !== false, 'Vibration')}</div>
+        <div class="eq-row"><div class="grow"><div class="item-title">Ask how hard each set was</div><div class="item-sub">Easy / Good / Hard / Max — sharpens weight suggestions</div></div>${sw('st-effort', s.askEffort !== false, 'Ask how hard each set was')}</div></div></section>
       ${equipmentSection(ctx)}
       <section class="section" id="backup"><p class="eyebrow">Cloud backup</p><div class="mt-8">${backupCard(ctx)}</div></section>
       <section class="section"><p class="eyebrow">Backup file</p>
@@ -144,7 +145,7 @@ export default {
       <section class="section"><p class="eyebrow">About</p><div class="card">
         <button class="link" style="padding:0" data-action="st-xp">How levels &amp; XP work</button>
         <p class="safety mt-12">${esc(SAFETY_TEXT)} If you feel pain, stop the exercise. If it persists, consult a qualified healthcare professional.</p>
-        <p class="tiny muted mt-12" style="margin-bottom:0">FORGE 1.3 · Build. Train. Level Up.</p></div></section>`;
+        <p class="tiny muted mt-12" style="margin-bottom:0">FORGE 1.4 · Build. Train. Level Up.</p></div></section>`;
   },
   actions: {
     'st-exp': (ctx, el) => ctx.store.saveSettings({ experience: el.dataset.v }),
@@ -155,6 +156,7 @@ export default {
     'st-deload': (ctx, el) => ctx.store.saveSettings({ deloadEvery: Number(el.dataset.v) }),
     ...backupActions,
     'st-sound': (ctx) => ctx.store.saveSettings({ sound: ctx.store.settings.sound === false }),
+    'st-effort': (ctx) => ctx.store.saveSettings({ askEffort: ctx.store.settings.askEffort === false }),
     'st-vib': (ctx) => ctx.store.saveSettings({ vibrate: ctx.store.settings.vibrate === false }),
     'st-xp': (ctx) => xpSheet(ctx),
     'st-eq-add': (ctx) => addEquipmentSheet(ctx),

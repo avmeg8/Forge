@@ -5,9 +5,10 @@ import { MUSCLE_BY_ID } from '../data/muscles.js';
 import { itemState, nextIncomplete, totals, defaultDraft, afterSet, blockOf, groupLabels, warmupSets, warmupSuggestion } from '../engine/session.js';
 import { DELOAD } from '../engine/deload.js';
 import { previousPerformance } from '../engine/xp.js';
-import { stepWeight, snapWeight } from '../engine/equipment.js';
+import { stepWeight, snapWeight, nextWeightUp, nextWeightDown } from '../engine/equipment.js';
 import { restFor } from '../engine/rating.js';
-import { sideBalance } from '../engine/progression.js';
+import { sideBalance, EFFORT, effortLabel } from '../engine/progression.js';
+import { swapOptions } from '../engine/swap.js';
 import { esc, kg, clock, setLabel, repsRange, plural } from '../utils/format.js';
 import { uid } from '../utils/id.js';
 import { exerciseInfoHtml } from './exercise.js';
@@ -36,6 +37,9 @@ function draft(ctx) {
   const nd = { ...defaultDraft({ session: a, itemIndex: i, previous: prev, recommendation: rec, cfg }), key };
   // deload week: start ~10% lighter (once you've logged a set, your own choice carries over)
   if (a.deload && cfg && !st.logged.length && item.weight == null) nd.weight = snapWeight(nd.weight * DELOAD.weightFactor, cfg);
+  // effort hint from the previous set ("felt easy" → a step up, "max and short" → a step down)
+  const hint = a.hints?.[i];
+  if (hint && cfg && hint.forSet === st.setIndex) nd.weight = hint.weight;
   (a.drafts ||= {})[i] = nd;
   return nd;
 }
@@ -70,7 +74,12 @@ function restView(ctx, a) {
   return `<div class="rest ${done ? 'rest-done' : ''}" role="dialog" aria-label="Rest timer">
     <div class="rest-set"><div class="small" style="color:var(--good);font-weight:800;letter-spacing:.1em">✓ SET COMPLETE</div>
       <div style="font-size:20px;font-weight:800" class="num mt-8">${esc(r.label)}</div>
-      ${r.xp ? `<div class="small muted num">+${Math.round(r.xp)} XP</div>` : ''}</div>
+      ${r.xp ? `<div class="small muted num">+${Math.round(r.xp)} XP</div>` : ''}
+      ${r.setIds?.length && ctx.store.settings.askEffort !== false ? (() => {
+        const cur = a.sets.find((x) => x.id === r.setIds[r.setIds.length - 1])?.rir;
+        return `<div class="effort mt-12" role="group" aria-label="How hard was that set?"><div class="tiny muted" style="margin-bottom:6px">How hard was it? <span class="faint">(reps left in the tank)</span></div>
+          <div class="effort-row">${EFFORT.map((e) => `<button class="effort-chip" data-action="s-rir" data-v="${e.v}" aria-pressed="${cur === e.v}"><b>${e.label}</b><small>${e.sub}</small></button>`).join('')}</div></div>`;
+      })() : ''}</div>
     <div class="rest-label">${done ? 'REST COMPLETE' : 'REST'}</div>
     <div class="rest-time" id="rest-time" aria-live="off">${clock(left)}</div>
     <div class="rest-ring"><i id="rest-bar" style="width:${(100 * (1 - left / r.total)).toFixed(1)}%"></i></div>
@@ -136,7 +145,7 @@ function render(ctx) {
   }
 
   const logged = st.logged.length || warmups.length ? `<div class="logged">${[...warmups, ...st.logged].map((s) => `<div class="logged-row ${s.warmup ? 'logged-row--wu' : ''}"><span class="tag">${s.warmup ? 'W' : `${s.setIndex + 1}${s.side ? s.side : ''}`}</span><span>${esc(setLabel(s, ex))}</span>
-      <span class="x num">${s.warmup ? 'warm-up' : `+${Math.round(live?.setXp[s.id] || 0)} XP`}</span>
+      <span class="x num">${s.warmup ? 'warm-up' : `${s.rir != null ? `<span class="rir-tag rir-${s.rir}">${effortLabel(s.rir)}</span> ` : ''}+${Math.round(live?.setXp[s.id] || 0)} XP`}</span>
       <button class="icon-btn" style="width:36px;height:36px" data-action="s-del-set" data-id="${s.id}" aria-label="Delete this set">${icon.close}</button></div>`).join('')}</div>` : '';
   const bal = sideBalance(ex, st.logged);
   const balance = bal && bal.level !== 'even' ? `<p class="balance-note ${bal.level}">${esc(bal.text)}</p>` : '';
@@ -151,7 +160,7 @@ function render(ctx) {
     ${a.deload ? `<div class="deload-pill">${icon.feather} Deload week — lighter on purpose: fewer sets, ~10% less weight</div>` : ''}
     ${inBlock ? `<div class="ss-pill"><b>${blk.idx.length === 2 ? 'Superset' : 'Circuit'} ${esc(labels[i])}</b><span>then ${esc(EXERCISE_BY_ID[a.items[nextInBlock].exerciseId].name)}${blk.idx.indexOf(i) === blk.idx.length - 1 ? ' after rest' : ' — no rest'}</span></div>` : ''}
     <div class="row row--between"><span class="ex-muscle">${esc(ex.primary.map((m) => MUSCLE_BY_ID[m].short).join(' · '))}</span>
-      <span class="small muted">Exercise ${i + 1} / ${a.items.length}</span></div>
+      <span class="small muted">Exercise ${i + 1} / ${a.items.length} · <button class="link" style="padding:4px 2px;font-size:13px" data-action="s-swap">⇄ Swap</button></span></div>
     <div class="row" style="align-items:center;gap:12px"><h1 class="ex-title grow">${esc(ex.name)}</h1>
       ${demo(ex, { cls: 'demo--thumb', open: true, caption: false })}</div>
     <div class="row row--between mt-8">
@@ -268,9 +277,90 @@ async function logSet(ctx) {
   await store.updateActive((s) => {
     if (nav.next !== -1) s.current = nav.next;
     const finished = nextIncomplete(s, s.current) === -1;
-    s.rest = finished ? null : { endsAt: Date.now() + restSec * 1000, total: restSec, label, xp };
+    const ids = [set.id, ...(set.side === 'R' ? s.sets.filter((x) => x.itemIndex === i && x.side === 'L' && x.setIndex === set.setIndex).map((x) => x.id) : [])];
+    s.rest = finished ? null : { endsAt: Date.now() + restSec * 1000, total: restSec, label, xp, setIds: ids, itemIndex: i };
   });
   if (nextIncomplete(a, a.current) === -1) ctx.toast(`✓ ${esc(label)} · +${Math.round(xp)} XP — all sets done!`, { kind: 'good' });
+}
+
+/** Store how hard the last set felt and nudge the next set's weight if it was clearly off. */
+async function rateEffort(ctx, rir) {
+  const a = A(ctx);
+  const r = a?.rest;
+  if (!r?.setIds) return;
+  const sets = a.sets.filter((x) => r.setIds.includes(x.id));
+  if (!sets.length) return;
+  const i = sets[0].itemIndex;
+  const item = a.items[i];
+  const ex = EXERCISE_BY_ID[item.exerciseId];
+  const cfg = ctx.store.cfgFor(ex.id);
+  const amount = Math.min(...sets.map((x) => (ex.metric === 'time' ? x.seconds ?? 0 : x.reps)));
+  let msg = '';
+  await ctx.store.updateActive((s) => {
+    for (const x of s.sets) if (r.setIds.includes(x.id)) x.rir = rir;
+    const next = sets[0].setIndex + 1;
+    const w = sets[0].weight;
+    if (!s.hints) s.hints = {};
+    delete s.hints[i];
+    if (cfg && ex.metric !== 'time' && next < item.sets) {
+      if (rir >= 4 && amount >= item.repMax) {
+        const up = nextWeightUp(w, cfg);
+        if (up) { s.hints[i] = { forSet: next, weight: up }; msg = `Felt easy — next set at ${kg(up)} kg.`; }
+      } else if (rir === 0 && amount < item.repMin) {
+        const down = nextWeightDown(w, cfg);
+        if (down) { s.hints[i] = { forSet: next, weight: down }; msg = `That was a grind — next set at ${kg(down)} kg.`; }
+      }
+      if (s.drafts?.[i]) delete s.drafts[i];
+    }
+  });
+  if (msg) ctx.toast(msg, { ms: 2200 });
+}
+
+/** Replace the current exercise with a similar one (keeps the remaining sets). */
+function swapSheet(ctx) {
+  const a = A(ctx);
+  const i = a.current;
+  const item = a.items[i];
+  const ex = EXERCISE_BY_ID[item.exerciseId];
+  const opts = swapOptions(ex.id, { caps: ctx.store.caps, experience: ctx.store.settings.experience, exclude: a.items.map((x) => x.exerciseId) });
+  ctx.sheet.open({
+    title: `Swap ${ex.name}`,
+    tall: true,
+    render: () => `<p class="small text-2" style="margin-top:0">Similar exercises you can do with your equipment. ${itemState(a, i).done ? 'Sets you already logged stay; the rest move to the new exercise.' : 'Your planned sets carry over.'}</p>
+      ${opts.length ? `<div class="list">${opts.map((o) => `<button class="item" data-action="s-swap-pick" data-id="${o.ex.id}">
+        <div class="grow" style="min-width:0"><div class="item-title ellipsis">${esc(o.ex.name)}</div>
+        <div class="item-sub">${esc(o.why)}${o.tag ? ` · ${o.tag}` : ''} · ${esc(o.ex.primary.map((m) => MUSCLE_BY_ID[m].short).join(', '))}</div></div>${icon.chev.replace('<svg', '<svg class="chev"')}</button>`).join('')}</div>`
+        : '<p class="muted">No similar exercise fits your equipment — try “Add exercise” from the exercise list instead.</p>'}`,
+    actions: {
+      's-swap-pick': async (c, el) => {
+        const nx = EXERCISE_BY_ID[el.dataset.id];
+        await ctx.store.updateActive((s) => swapItem(s, s.current, nx));
+        ctx.sheet.close();
+        ctx.toast(`Swapped to ${esc(nx.name)}.`, { kind: 'good' });
+      },
+    },
+  });
+}
+
+export function swapItem(s, i, nx) {
+  const item = s.items[i];
+  const done = itemState(s, i).done;
+  const fresh = { uid: uid('i'), exerciseId: nx.id, sets: Math.max(1, item.sets - done), repMin: nx.reps[0], repMax: nx.reps[1], weight: null, ...(item.group ? { group: item.group } : {}), swappedFrom: item.exerciseId };
+  if (!done && !s.sets.some((x) => x.itemIndex === i)) {
+    s.items[i] = { ...fresh, sets: item.sets };
+  } else {
+    // keep what was logged under the old exercise; insert the new one right after it
+    item.sets = done;
+    s.items.splice(i + 1, 0, fresh);
+    for (const x of s.sets) if (x.itemIndex > i) x.itemIndex += 1;
+    const shift = (obj) => obj && Object.fromEntries(Object.entries(obj).map(([k, v]) => [Number(k) > i ? Number(k) + 1 : Number(k), v]));
+    s.drafts = shift(s.drafts) || {};
+    s.hints = shift(s.hints) || {};
+    s.current = i + 1;
+  }
+  if (s.drafts) delete s.drafts[s.current];
+  if (s.hints) delete s.hints[s.current];
+  s.rest = null;
 }
 
 function exerciseListSheet(ctx) {
@@ -357,6 +447,8 @@ export default {
   },
   actions: {
     's-log': (ctx) => logSet(ctx),
+    's-rir': (ctx, el) => rateEffort(ctx, Number(el.dataset.v)),
+    's-swap': (ctx) => swapSheet(ctx),
     's-warmup': async (ctx, el) => {
       const a = A(ctx);
       const item = a.items[a.current];

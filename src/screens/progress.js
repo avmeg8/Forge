@@ -104,6 +104,7 @@ export default {
         ${legend(u.mode)}
         <p class="bm-hint">Tap any muscle for details</p>
       </div>
+      <button class="item mt-12" data-action="go" data-href="#/week">${icon.calendar.replace('<svg', '<svg style="width:22px;flex:none;color:var(--accent)"')}<div class="grow"><div class="item-title">Week in review</div><div class="item-sub">Sets, XP, PRs and level-ups, week by week</div></div>${icon.chev.replace('<svg', '<svg class="chev"')}</button>
       <div class="stat-grid mt-12">
         <div class="stat"><b>${done.length}</b><span>workouts</span></div>
         <div class="stat"><b>${num(weekXp)}</b><span>XP this week</span></div>
