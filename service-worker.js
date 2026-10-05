@@ -9,7 +9,7 @@
  *   alongside the old one and the app offers a "Reload" toast to switch.
  */
 // <precache>
-const VERSION = '2c18d6af8e';
+const VERSION = '38366bf46a';
 const APP_SHELL = [
   "./",
   "index.html",
@@ -22,8 +22,10 @@ const APP_SHELL = [
   "src/assets/icons/maskable-512.png",
   "src/components/bodymap.js",
   "src/components/charts.js",
+  "src/components/demo.js",
   "src/components/overlay.js",
   "src/components/ui.js",
+  "src/data/animations.js",
   "src/data/equipment.js",
   "src/data/exercises.js",
   "src/data/muscles.js",
