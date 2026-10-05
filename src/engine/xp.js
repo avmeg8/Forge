@@ -23,10 +23,13 @@
  *      × strength         1.0 → 1.5 as your best on the exercise grows from your first-ever
  *                         performance to double it. Getting stronger makes every set worth more.
  *      × difficulty       0.9 beginner · 1.0 intermediate · 1.1 advanced exercise
+ *                         (deload-week sessions are never scored below 0.9 here)
  *      × consistency      1 + 2% per streak day (max +20%) at the start of the session
  *      × weeklyVolume     per muscle, rolling 7 days: first 12 effective sets 1.0,
  *                         sets 12–20 0.5, beyond 20 → 0.15 (junk-volume protection)
  *      × sessionVolume    per muscle in one session: beyond 10 effective sets → 0.3
+ *
+ * Warm-up sets (set.warmup) earn no XP and never count for PRs or volume.
  *
  * Why it resists exploitation:
  *   • 100 light reps of anything → effort + intensity penalties.
@@ -150,7 +153,10 @@ export function computeProgress(sessions, settings = {}, now = Date.now()) {
     const sessionBest = {}; // exerciseId → best score so far in this session
     const prFlag = {}; // exerciseId → PR bonus already granted this session
     const prevSessionOf = {}; // exerciseId → previous session record (before this one)
-    const sets = [...session.sets].sort((a, b) => a.ts - b.ts);
+    // warm-up sets are logged for reference only: no XP, no PRs, no volume
+    for (const w of session.sets) if (w.warmup) res.setXp[w.id] = 0;
+    const sets = session.sets.filter((x) => !x.warmup).sort((a, b) => a.ts - b.ts);
+    if (!sets.length) { sessionResults[session.id] = res; continue; }
 
     for (const set of sets) {
       const ex = EXERCISE_BY_ID[set.exerciseId];
@@ -162,7 +168,8 @@ export function computeProgress(sessions, settings = {}, now = Date.now()) {
 
       const priorBest = st.bestScore; // from previous sessions only
       const ref = priorBest || sessionBest[ex.id] || 0;
-      const intensity = ref ? intensityFactor(score / ref) : 1;
+      // deload weeks are light on purpose — don't treat those sets as junk
+      const intensity = ref ? Math.max(intensityFactor(score / ref), session.deload ? 0.9 : 0) : 1;
       const effort = effortFactor(ex, set);
 
       // progressive overload

@@ -99,15 +99,37 @@ export function restFor(ex, settings) {
   return settings?.restMode && settings.restMode !== 'exercise' ? Number(settings.restMode) : ex.rest;
 }
 
-/** Realistic duration estimate in minutes. */
+/** Seconds of work + rest for one set of an item (rest excluded). */
+function workSec(it, ex) {
+  const mid = ((it.repMin ?? ex.reps[0]) + (it.repMax ?? ex.reps[1])) / 2;
+  return (ex.metric === 'time' ? mid : mid * 3.5) * (ex.unilateral ? 2 : 1) + 20;
+}
+
+/**
+ * Realistic duration estimate in minutes. Supersets/circuits (adjacent items sharing a
+ * `group`) rest once per round instead of after every exercise.
+ */
 export function estimateMinutes(items, settings) {
   let sec = 180; // warm-up
-  for (const it of items) {
-    const ex = EXERCISE_BY_ID[it.exerciseId];
-    if (!ex) continue;
-    const mid = ((it.repMin ?? ex.reps[0]) + (it.repMax ?? ex.reps[1])) / 2;
-    const work = (ex.metric === 'time' ? mid : mid * 3.5) * (ex.unilateral ? 2 : 1) + 20;
-    sec += it.sets * (work + restFor(ex, settings)) + 30;
+  const list = items.filter((it) => EXERCISE_BY_ID[it.exerciseId]);
+  for (let i = 0; i < list.length;) {
+    let j = i + 1;
+    while (list[i].group && j < list.length && list[j].group === list[i].group) j++;
+    const block = list.slice(i, j);
+    if (block.length === 1) {
+      const it = block[0];
+      const ex = EXERCISE_BY_ID[it.exerciseId];
+      sec += it.sets * (workSec(it, ex) + restFor(ex, settings)) + 30;
+    } else {
+      const rounds = Math.max(...block.map((it) => it.sets));
+      for (let r = 0; r < rounds; r++) {
+        const members = block.filter((it) => it.sets > r);
+        sec += members.reduce((a, it) => a + workSec(it, EXERCISE_BY_ID[it.exerciseId]) + 15, 0);
+        sec += Math.max(...members.map((it) => restFor(EXERCISE_BY_ID[it.exerciseId], settings)));
+      }
+      sec += 30 * block.length;
+    }
+    i = j;
   }
   return Math.round(sec / 60);
 }
@@ -274,6 +296,9 @@ export function rateWorkout(items, ctx = {}) {
   if (C.volume >= 0.9) positives.push(`Reasonable volume (${totalSets} sets)`);
   if (C.variety >= 0.8 && C.redundancy >= 0.9 && C.progression >= 0.9) positives.push('Good exercise selection');
   if (C.duration >= 0.95) positives.push(`Fits your ${targetMinutes}-minute target`);
+  const ungrouped = estimateMinutes(valid.map((it) => ({ ...it, group: null })), settings);
+  const saved = ungrouped - estimatedMinutes;
+  if (saved >= 3) positives.push(`Supersets save about ${saved} minutes`);
   if (C.recovery === 1 && progress && Object.values(progress.muscles).some((m) => m.lastTrained)) positives.push('Target muscles are recovered');
 
   const why = auto ? '' : ` — part of ${an(fname)} workout`;
@@ -349,6 +374,6 @@ export function rateWorkout(items, ctx = {}) {
   return {
     score, grade, label, split: splitInfo, typeName: split.name, headline,
     positives, improvements: improvements.slice(0, 5), improvementsAll: improvements, warnings, coverage, components: C,
-    suggestion, estimatedMinutes, totalSets, muscleEff: eff, targetMinutes, dose: [lo, hi], offShare,
+    suggestion, estimatedMinutes, totalSets, muscleEff: eff, targetMinutes, dose: [lo, hi], offShare, savedMinutes: Math.max(0, saved),
   };
 }
