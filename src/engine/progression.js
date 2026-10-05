@@ -6,6 +6,8 @@
  *     weight step your dumbbell allows.
  *  3. If you fall far short of the bottom of the range → drop one step.
  *  4. Otherwise keep the weight and add reps.
+ *  Effort (reps in reserve, optional per set) sharpens this: sets that all felt easy at the
+ *  top of the range earn a double step; grinding short of the range drops the weight.
  *  5. If the dumbbell is already at its max → exercise-specific alternatives
  *     (harder variation, unilateral version, tempo, pauses, extra set, more reps).
  *
@@ -14,6 +16,15 @@
 import { EXERCISE_BY_ID } from '../data/exercises.js';
 import { nextWeightUp, nextWeightDown, snapWeight } from './equipment.js';
 import { kg } from '../utils/format.js';
+
+/** Optional per-set effort: reps you could still have done (reps in reserve). */
+export const EFFORT = [
+  { v: 4, label: 'Easy', sub: '4+ more' },
+  { v: 2, label: 'Good', sub: '2–3 more' },
+  { v: 1, label: 'Hard', sub: '1 more' },
+  { v: 0, label: 'Max', sub: 'no more' },
+];
+export const effortLabel = (rir) => EFFORT.find((e) => e.v === rir)?.label || '';
 
 function workingSets(ex, sets) {
   if (!sets?.length) return [];
@@ -30,7 +41,7 @@ function workingSets(ex, sets) {
     }
     work = Object.values(bySet);
   }
-  return work.map((s) => ({ weight: s.weight || 0, amount: amount(s) || 0 }));
+  return work.map((s) => ({ weight: s.weight || 0, amount: amount(s) || 0, rir: s.rir ?? null }));
 }
 
 /** Exercise-specific options when weight can't go up. */
@@ -71,6 +82,11 @@ export function recommend(exerciseId, sets, target, cfg) {
   const avg = amounts.reduce((a, b) => a + b, 0) / amounts.length;
   const unit = ex.metric === 'time' ? ' s' : '';
   const loaded = !!cfg && ex.load !== 'bodyweight' && ex.load !== 'bands';
+  const rirs = work.map((w) => w.rir).filter((r) => r != null);
+  const rated = rirs.length >= Math.ceil(work.length / 2);
+  const avgRir = rated ? rirs.reduce((a, b) => a + b, 0) / rirs.length : null;
+  const easy = rated && avgRir >= 3;
+  const grind = rated && Math.min(...rirs) === 0;
 
   if (ex.metric === 'time') {
     if (allTop) {
@@ -87,6 +103,10 @@ export function recommend(exerciseId, sets, target, cfg) {
       return { action: 'max', weight: 0, headline: 'Level up the movement', text: `${t.sets} × ${t.repMax} done. Time for a harder version:`, alternatives: maxedAlternatives(ex, t) };
     }
     const up = nextWeightUp(weight, cfg);
+    const up2 = up && easy ? nextWeightUp(up, cfg) : null;
+    if (up2 && (up2 - weight) / weight <= 0.2) {
+      return { action: 'increase', weight: up2, headline: `Try ${kg(up2)} kg`, text: `All sets hit ${t.repMax} and felt easy — skip a step and aim for ${t.repMin}+ reps.` };
+    }
     if (up) {
       const jump = (up - weight) / weight;
       return {
@@ -100,12 +120,15 @@ export function recommend(exerciseId, sets, target, cfg) {
     return { action: 'max', weight, headline: 'Dumbbell maxed out', text: `${kg(weight)} kg is your heaviest setting. Keep progressing with:`, alternatives: maxedAlternatives(ex, t) };
   }
 
-  if (loaded && avg < t.repMin - 2) {
+  if (loaded && (avg < t.repMin - 2 || (grind && avg < t.repMin))) {
     const down = nextWeightDown(weight, cfg);
     if (down) return { action: 'decrease', weight: down, headline: `Try ${kg(down)} kg`, text: `Reps were well below ${t.repMin}. A slightly lighter weight will build more strength.` };
   }
 
-  const goal = amounts.map((a) => Math.min(t.repMax, a + 1));
+  const goal = amounts.map((a) => Math.min(t.repMax, a + (easy ? 2 : 1)));
+  if (easy && loaded) {
+    return { action: 'stay', weight, headline: `Stay at ${kg(weight)} kg`, text: `Those sets felt easy — push closer to your limit: aim for ${goal.join(', ')}.`, goal };
+  }
   return {
     action: 'stay', weight,
     headline: loaded ? `Stay at ${kg(weight)} kg` : `Aim for ${goal.join(', ')}${unit}`,
