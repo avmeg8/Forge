@@ -3,13 +3,14 @@
  *
  * • Install: precache the entire app shell (it's small), so FORGE works fully offline
  *   right after the first visit / installation.
- * • Fetch: cache-first for same-origin files (instant start on slow phones), refreshed in
- *   the background; navigations fall back to the cached index.html.
- * • Update: `npm run build` rewrites VERSION + APP_SHELL below; a new VERSION installs
- *   alongside the old one and the app offers a "Reload" toast to switch.
+ * • Fetch: cache-first from the precache of THIS version only (instant start, never a mix
+ *   of releases); navigations get the cached index.html.
+ * • Update: `npm run build` rewrites VERSION + APP_SHELL below; the browser notices the new
+ *   service worker on the next launch, installs the complete new version, takes over and
+ *   the page reloads once.
  */
 // <precache>
-const VERSION = 'dec79684ed';
+const VERSION = '1ae73f727e';
 const APP_SHELL = [
   "./",
   "index.html",
@@ -69,10 +70,18 @@ const APP_SHELL = [
 
 const CACHE = `forge-${VERSION}`;
 
+/*
+ * Every file is served from ONE versioned cache that is filled in a single step at install.
+ * Files are never refreshed one by one in the background — that could leave a cache holding
+ * a mix of two releases (modules that don't fit together → the app can't start). A new
+ * release = a new VERSION = a complete new cache, switched over all at once.
+ */
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL.map((u) => new Request(u, { cache: 'reload' })))),
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(APP_SHELL.map((u) => new Request(u, { cache: 'reload' })));
+    await self.skipWaiting(); // take over right away; the page reloads itself once
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -93,30 +102,19 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  if (req.mode === 'navigate') {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE);
-      const cached = await cache.match('index.html') || await cache.match('./');
-      const network = fetch(req).then((res) => {
-        if (res.ok) cache.put('index.html', res.clone());
-        return res;
-      }).catch(() => null);
-      return cached || (await network) || new Response('FORGE is offline and not cached yet.', { status: 503 });
-    })());
-    return;
-  }
-
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const cached = await cache.match(req, { ignoreSearch: true });
-    const network = fetch(req).then((res) => {
-      if (res.ok && res.type === 'basic') cache.put(req, res.clone());
-      return res;
-    }).catch(() => null);
-    if (cached) {
-      event.waitUntil(network);
-      return cached;
+    if (req.mode === 'navigate') {
+      const shell = await cache.match('index.html');
+      if (shell) return shell;
+      try { return await fetch(req); } catch { return new Response('FORGE is offline and not cached yet.', { status: 503 }); }
     }
-    return (await network) || new Response('', { status: 504 });
+    const cached = await cache.match(req, { ignoreSearch: true });
+    if (cached) return cached;
+    try {
+      return await fetch(req);
+    } catch {
+      return new Response('', { status: 504 });
+    }
   })());
 });
