@@ -508,3 +508,25 @@ button.mlevel:active { background: var(--surface-2); }
 .sched-row.is-clash .sched-select { border-color: rgba(231, 180, 83, .6); }
 .logged-row--wu { background: transparent; border: 1px dashed var(--line); color: var(--text-2); }
 .logged-row--wu .tag { background: transparent; border: 1px solid var(--line); }
+
+/* ───────────────────────── v1.4: effort, set editing, week in review ───────────────────────── */
+.effort-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.effort-chip { min-height: 52px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 4px 2px; }
+.effort-chip b { font-size: 14px; }
+.effort-chip small { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.effort-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.rest .effort { width: 100%; max-width: 380px; margin-left: auto; margin-right: auto; }
+.faint { color: var(--faint); }
+.rir-tag { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
+.rir-4 { color: var(--good); background: var(--good-soft); }
+.rir-1 { color: var(--warn); background: var(--warn-soft); }
+.rir-0 { color: var(--bad); background: var(--bad-soft); }
+.set-row { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px; background: none; border: 0; padding: 7px 0; color: inherit; text-align: left; font: inherit; border-top: 1px solid var(--line-soft); }
+.set-row:first-child { border-top: 0; }
+.set-row > span:last-child { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.set-edit-ic { width: 14px; height: 14px; color: var(--faint); }
+.week-nav { display: flex; align-items: center; gap: 8px; }
+.week-nav .icon-btn[disabled] { opacity: .3; }
+.chg { color: var(--muted); }
+.chg.up { color: var(--good); }
+.chg.down { color: var(--warn); }
