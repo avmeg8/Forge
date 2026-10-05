@@ -37,7 +37,7 @@ export default {
         <div class="stat"><b>${s.sets.length}</b><span>sets</span></div>
         <div class="stat"><b style="color:var(--accent-2)">+${num(res.totalXp)}</b><span>XP</span></div>
       </div>
-      ${s.ratingAtStart ? `<p class="small muted mt-12" style="margin-bottom:0">Workout rating: <b class="text-2">${s.ratingAtStart.score}/100 · ${esc(s.ratingAtStart.label)}</b></p>` : ''}
+      ${s.ratingAtStart ? `<p class="small muted mt-12" style="margin-bottom:0">Workout rating: <b class="text-2">${s.ratingAtStart.score}/100 · ${esc(s.ratingAtStart.label)}${s.ratingAtStart.split ? ` ${esc(s.ratingAtStart.split.toLowerCase())} workout` : ""}</b></p>` : ''}
     </div>`;
 
     const lvl = res.levelUps.length ? `<section class="section"><p class="eyebrow">Level up</p><div class="stack mt-8">${res.levelUps.map((l) => `<div class="lvlup">${icon.bolt}<span class="grow">${esc(MUSCLE_BY_ID[l.muscle].name)} reached Level ${l.to}${l.tierUp ? ` — <b>${esc(l.tier.name)}</b>` : ''}</span></div>`).join('')}</div></section>` : '';

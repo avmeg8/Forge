@@ -88,7 +88,7 @@ function nextUp(ctx) {
   const { store } = ctx;
   const list = store.state.templates.filter((t) => t.items.length);
   if (!list.length) return `<p class="small muted mt-12 center">Build your first workout in a minute.</p>`;
-  const scored = list.map((t) => ({ t, r: store.rate(t.items, t.targetMinutes) }))
+  const scored = list.map((t) => ({ t, r: store.rateTemplate(t) }))
     .sort((a, b) => (b.r.components.recovery - a.r.components.recovery) || ((a.t.lastPerformedAt || 0) - (b.t.lastPerformedAt || 0)));
   const { t, r } = scored[0];
   const muscles = [...new Set(t.items.flatMap((i) => EXERCISE_BY_ID[i.exerciseId]?.primary || []))].slice(0, 3).map((m) => MUSCLE_BY_ID[m].short).join(', ');

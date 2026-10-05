@@ -1,5 +1,6 @@
 /** Workouts — my saved workouts + training history. */
 import { appbar, icon, scoreBadge, empty } from '../components/ui.js';
+import { planCard } from './plan.js';
 import { esc, plural, duration, num } from '../utils/format.js';
 import { dayHeading, dayKey, relativeDay } from '../utils/date.js';
 
@@ -34,11 +35,14 @@ export default {
         render: () => `<div class="list">
           <button class="item" data-action="w-edit">${icon.edit}<span class="grow item-title">Edit workout</span></button>
           <button class="item" data-action="w-dup">${icon.copy}<span class="grow item-title">Duplicate</span></button>
+          <button class="item" data-action="w-plan">${icon.list}<span class="grow item-title">${t.inPlan === false ? 'Add to weekly plan' : 'Remove from weekly plan'}</span></button>
           <button class="item" data-action="w-del" style="color:var(--bad)">${icon.trash}<span class="grow item-title">Delete</span></button></div>`,
         actions: {
           'w-edit': () => { ctx.sheet.close(); ctx.go(`#/builder/${t.id}`); },
+          'w-plan': async () => { t.inPlan = t.inPlan === false; await ctx.store.saveTemplate(t); ctx.sheet.close(); ctx.toast(t.inPlan ? 'Added to your weekly plan.' : 'Removed from your weekly plan.'); },
           'w-dup': async () => {
             const copy = ctx.store.newTemplate(`${t.name} (copy)`, t.items.map((i) => ctx.store.makeItem(i.exerciseId, { sets: i.sets, repMin: i.repMin, repMax: i.repMax, weight: i.weight })));
+            copy.focus = t.focus || 'auto'; copy.customMuscles = [...(t.customMuscles || [])];
             copy.targetMinutes = t.targetMinutes;
             await ctx.store.saveTemplate(copy);
             ctx.sheet.close();
@@ -66,12 +70,12 @@ function mine(ctx) {
       action: newBtn,
     });
   }
-  return `${newBtn}<div class="list mt-16">${list.map((t) => {
-    const r = store.rate(t.items, t.targetMinutes);
+  return `${planCard(ctx)}${newBtn}<div class="list mt-16">${list.map((t) => {
+    const r = store.rateTemplate(t);
     return `<div class="item" style="padding-right:4px">
-      <button class="row grow" style="background:none;border:0;padding:0;text-align:left;min-width:0" data-action="go" data-href="#/builder/${t.id}">
+      <button class="row grow" style="background:none;border:0;padding:0;text-align:left;min-width:0;overflow:hidden" data-action="go" data-href="#/builder/${t.id}">
         ${scoreBadge(r)}<div class="grow" style="min-width:0"><div class="item-title ellipsis">${esc(t.name)}</div>
-        <div class="item-sub ellipsis">${t.items.length ? `${plural(t.items.length, 'exercise')} · ${r.totalSets} sets · ~${r.estimatedMinutes} min` : 'No exercises yet'}</div>
+        <div class="item-sub ellipsis">${t.items.length ? `${esc(r.split.name)} · ${plural(t.items.length, 'exercise')} · ~${r.estimatedMinutes} min` : 'No exercises yet'}${t.inPlan === false ? ' · not in plan' : ''}</div>
         ${t.lastPerformedAt ? `<div class="item-sub">Last done ${esc(relativeDay(t.lastPerformedAt).toLowerCase())}</div>` : ''}</div></button>
       ${t.items.length ? `<button class="icon-btn" data-action="start-template" data-id="${t.id}" aria-label="Start ${esc(t.name)}" style="color:var(--accent)">${icon.play}</button>` : ''}
       <button class="icon-btn" data-action="w-more" data-id="${t.id}" aria-label="More options for ${esc(t.name)}">${icon.more}</button>

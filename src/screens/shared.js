@@ -177,7 +177,7 @@ export function openStartPicker(ctx) {
   ctx.sheet.open({
     title: 'Start workout',
     render: () => `<div class="list">${[...list].sort((a, b) => (b.lastPerformedAt || 0) - (a.lastPerformedAt || 0)).map((t) => {
-      const r = store.rate(t.items, t.targetMinutes);
+      const r = store.rateTemplate(t);
       return `<button class="item" data-action="start-template" data-id="${t.id}">${scoreBadge(r)}
         <div class="grow"><div class="item-title ellipsis">${esc(t.name)}</div>
         <div class="item-sub">${plural(t.items.length, 'exercise')} · ~${r.estimatedMinutes} min${t.lastPerformedAt ? ` · ${esc(relativeDay(t.lastPerformedAt).toLowerCase())}` : ''}</div></div>${icon.play.replace('<svg', '<svg style="width:22px;color:var(--accent)"')}</button>`;

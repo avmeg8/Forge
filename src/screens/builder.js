@@ -1,7 +1,8 @@
 /** Workout builder — create, edit, reorder; live analysis & rating as you build. */
 import { appbar, icon, stepper, bar } from '../components/ui.js';
 import { EXERCISE_BY_ID } from '../data/exercises.js';
-import { MUSCLE_BY_ID } from '../data/muscles.js';
+import { MUSCLE_BY_ID, MUSCLES } from '../data/muscles.js';
+import { SPLITS, SPLIT_GROUPS, SPLIT_BY_ID, resolveSplit } from '../data/splits.js';
 import { recoveryStatus } from '../engine/recovery.js';
 import { stepWeight, snapWeight } from '../engine/equipment.js';
 import { esc, kg, repsRange, plural } from '../utils/format.js';
@@ -87,6 +88,17 @@ function itemCard(ctx, t, item, i) {
   </div>`;
 }
 
+const COV_CLASS = { 'On target': 'bar--good', Almost: '', Low: 'bar--warn', Missing: 'bar--warn', High: 'bar--warn', Support: 'bar--muted', 'Off-focus': 'bar--off' };
+
+export function coverageHtml(r) {
+  const target = r.coverage.filter((c) => c.role === 'target');
+  const other = r.coverage.filter((c) => c.role !== 'target').slice(0, 5);
+  const row = (c) => `<div class="cov"><span class="ellipsis">${esc(c.name)}</span>${bar(c.pct, COV_CLASS[c.label] || '')}<span class="lbl lbl-${c.label.replace(/\W/g, '').toLowerCase()}">${esc(c.label)}${c.eff ? ` · ${c.eff}` : ''}</span></div>`;
+  return `<div class="mt-16"><div class="row row--between"><p class="eyebrow">Target muscles</p><span class="tiny muted">${r.dose[0]}–${r.dose[1]} sets each</span></div>
+      <div class="mt-8">${target.map(row).join('')}</div></div>
+    ${other.length ? `<div class="mt-12"><p class="eyebrow">Also worked</p><div class="mt-8">${other.map(row).join('')}</div></div>` : ''}`;
+}
+
 export function analysisCard(r, { withSuggestion = true } = {}) {
   if (!r.totalSets) {
     return `<div class="card"><p class="eyebrow">Workout rating</p><p class="muted mt-8">${esc(r.headline)}</p></div>`;
@@ -103,19 +115,74 @@ export function analysisCard(r, { withSuggestion = true } = {}) {
       <button class="btn btn--sm btn--primary" data-action="b-add-suggest">Add</button></div></div>`;
   })() : '';
   return `<div class="card" id="analysis">
-    <p class="eyebrow">Workout rating</p>
+    <p class="eyebrow">Workout rating · ${esc(r.split.name)}${r.split.auto ? ' (auto)' : ''}</p>
     <div class="rating mt-8">
       <div class="rating-score">${r.score}<small> / 100</small></div>
-      <div><div class="rating-label ${r.grade}">${esc(r.label)}</div><div class="small text-2">${esc(r.typeName)} · ${r.totalSets} sets · ~${r.estimatedMinutes} min</div></div>
+      <div><div class="rating-label ${r.grade}">${esc(r.label)}</div><div class="small text-2">${r.totalSets} sets · ~${r.estimatedMinutes} min</div></div>
     </div>
     <p class="mt-12" style="margin-bottom:0">${esc(r.headline)}</p>
-    <div class="mt-16"><p class="eyebrow">Muscle coverage</p>
-      <div class="mt-8">${r.coverage.slice(0, 8).map((c) => `<div class="cov"><span class="ellipsis">${esc(c.name)}</span>${bar(c.pct, c.eff >= 3 ? 'bar--good' : '')}<span class="lbl">${esc(c.label)}</span></div>`).join('')}</div></div>
+    ${coverageHtml(r)}
     ${checks ? `<div class="mt-16"><p class="eyebrow">Good</p><ul class="checks mt-8">${checks}</ul></div>` : ''}
     ${improve ? `<div class="mt-16"><p class="eyebrow">Could improve</p><ul class="checks mt-8">${improve}</ul></div>` : ''}
     ${warns ? `<div class="mt-16"><p class="eyebrow">Recovery</p><ul class="checks mt-8">${warns}</ul></div>` : ''}
     ${sug}
   </div>`;
+}
+
+/* ───────────── focus / split picker ───────────── */
+function focusLabel(t, r) {
+  const f = t.focus || 'auto';
+  if (f === 'auto') return r.totalSets ? `Auto · ${r.split.name}` : 'Auto';
+  if (f === 'custom') return `Custom · ${(t.customMuscles || []).map((m) => MUSCLE_BY_ID[m].short).join(', ') || 'pick muscles'}`;
+  return SPLIT_BY_ID[f]?.name || f;
+}
+
+function openFocusSheet(ctx) {
+  const t0 = tpl(ctx);
+  const custom = new Set(t0.customMuscles || []);
+  ctx.sheet.open({
+    title: 'Workout focus',
+    tall: true,
+    render: () => {
+      const t = tpl(ctx);
+      const f = t.focus || 'auto';
+      const r = ctx.store.rateTemplate({ ...t, focus: 'auto' });
+      const chip = (id, name) => `<button class="chip" data-action="f-pick" data-v="${id}" aria-pressed="${f === id}">${esc(name)}</button>`;
+      const groups = SPLIT_GROUPS.filter((g) => g.id !== 'auto' && g.id !== 'custom').map((g) => `<div class="mt-16"><p class="eyebrow">${esc(g.name)}</p>
+        <div class="focus-chips mt-8">${SPLITS.filter((sp) => sp.group === g.id).map((sp) => chip(sp.id, sp.name)).join('')}</div></div>`).join('');
+      const muscles = MUSCLES.map((m) => `<button class="chip" data-action="f-muscle" data-v="${m.id}" aria-pressed="${custom.has(m.id)}">${esc(m.short)}</button>`).join('');
+      const sel = f !== 'auto' && f !== 'custom' ? resolveSplit(f) : null;
+      return `<p class="small text-2" style="margin-top:0">FORGE rates the workout as a <b>${esc(f === 'auto' ? 'workout of the detected type' : f === 'custom' ? 'custom focus' : sel.name.toLowerCase() + ' workout')}</b> — it won't penalise you for muscles outside the focus.</p>
+        <div class="focus-chips">${chip('auto', t.items.length ? `Automatic · ${r.split.name}` : 'Automatic')}</div>
+        ${groups}
+        <div class="mt-16"><p class="eyebrow">Custom</p><div class="focus-chips mt-8">${chip('custom', 'Choose my own muscles')}</div>
+          ${f === 'custom' ? `<p class="small muted mt-12">Tap the muscles this workout targets:</p><div class="focus-chips mt-8">${muscles}</div>` : ''}</div>
+        ${sel ? `<p class="small muted mt-16">Targets: <span class="text-2">${sel.target.map((m) => MUSCLE_BY_ID[m].short).join(', ')}</span>${sel.support.length ? `<br>Also welcome: ${sel.support.map((m) => MUSCLE_BY_ID[m].short).join(', ')}` : ''}</p>` : ''}`;
+    },
+    foot: () => `<button class="btn btn--primary btn--block" data-action="close-sheet">Done</button>`,
+    actions: {
+      'f-pick': async (c, el) => {
+        const t = tpl(ctx);
+        t.focus = el.dataset.v;
+        if (t.focus === 'custom' && !custom.size) {
+          // seed custom with whatever the workout already targets
+          const r = ctx.store.rateTemplate({ ...t, focus: 'auto' });
+          r.split.target.forEach((m) => custom.add(m));
+        }
+        t.customMuscles = [...custom];
+        await save(ctx, t);
+        ctx.sheet.refresh();
+      },
+      'f-muscle': async (c, el) => {
+        const m = el.dataset.v;
+        if (custom.has(m)) custom.delete(m); else custom.add(m);
+        const t = tpl(ctx);
+        t.customMuscles = [...custom];
+        await save(ctx, t);
+        ctx.sheet.refresh();
+      },
+    },
+  });
 }
 
 /* ───────────── add-exercise sheet ───────────── */
@@ -166,11 +233,13 @@ export default {
     const t = tpl(ctx);
     if (!t) return `${appbar({ title: 'Workout', back: true })}<div class="card">This workout no longer exists.</div>`;
     ui(ctx);
-    const r = ctx.store.rate(t.items, t.targetMinutes);
+    const r = ctx.store.rateTemplate(t);
     const active = ctx.store.state.active;
     return `${appbar({ title: 'Build workout', back: true, right: `<button class="icon-btn" data-action="b-delete" aria-label="Delete workout">${icon.trash}</button>` })}
       <label class="sr-only" for="b-name">Workout name</label>
       <input id="b-name" class="input input--title" value="${esc(t.name)}" data-input="b-name" maxlength="40" autocomplete="off" placeholder="Workout name">
+      <button class="focus-btn mt-8" data-action="b-focus" aria-label="Workout focus">
+        <span class="small muted">Focus</span><b>${esc(focusLabel(t, r))}</b>${icon.down}</button>
       <div class="row mt-12" style="flex-wrap:wrap;gap:8px"><span class="small muted">Target</span>
         <div class="dur-chips" role="group" aria-label="Target duration">${DURATIONS.map((d) => `<button class="chip" data-action="b-dur" data-v="${d}" aria-pressed="${t.targetMinutes === d}">${d} min</button>`).join('')}</div></div>
 
@@ -192,6 +261,7 @@ export default {
   },
   actions: {
     'b-add-open': (ctx) => openAddSheet(ctx),
+    'b-focus': (ctx) => openFocusSheet(ctx),
     'b-toggle': (ctx, el) => { const u = ui(ctx); u.open = u.open === el.dataset.uid ? null : el.dataset.uid; ctx.render(); },
     'b-dur': (ctx, el) => { const t = tpl(ctx); t.targetMinutes = Number(el.dataset.v); return save(ctx, t); },
     'b-jump': () => document.getElementById('analysis')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
@@ -226,7 +296,7 @@ export default {
     },
     'b-add-suggest': async (ctx) => {
       const t = tpl(ctx);
-      const r = ctx.store.rate(t.items, t.targetMinutes);
+      const r = ctx.store.rateTemplate(t);
       if (!r.suggestion) return;
       t.items.push(ctx.store.makeItem(r.suggestion.exerciseId, { sets: r.suggestion.sets }));
       await save(ctx, t);
