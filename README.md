@@ -8,7 +8,9 @@ FORGE is a mobile-first, offline-capable workout tracker (Progressive Web App) d
 - **Train**: a focused logging screen with one-tap sets, a rest timer, separate left/right tracking and automatic PR detection.
 - **Progress**: an interactive anatomical body map and an 18-muscle Tier → Level → XP system that rewards real progressive overload instead of junk volume.
 
-No backend, no account, no build step. Everything is stored on the device in IndexedDB, and the app keeps working with no connection once it has loaded.
+- **Plan**: "Build it for me" generates a well-rated workout for any focus and time budget; supersets/circuits; a weekday schedule with a weekly plan rating; warm-up sets; planned deload weeks; body-weight tracking.
+
+No account and no build step. Everything is stored on the device in IndexedDB and the app works offline. Optional **cloud backup** (Settings → Cloud backup) syncs to a Supabase function (`forge_sync`) using a random 25-character backup key — the server stores only a hash of the key, and writes queue up offline until the next sync (see `src/storage/sync.js`).
 
 ---
 
