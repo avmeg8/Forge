@@ -252,6 +252,26 @@ await step('history: list and open a workout', async () => {
   await S('text=Sets').first().waitFor();
 });
 
+await step('exercise demos: every exercise has an animated how-to', async () => {
+  await page.goto(`${BASE}#/exercise/db_floor_press`);
+  await S('.demo .demo-svg').first().waitFor();
+  const d1 = await S('.demo .demo-svg [data-p="armN"]').first().getAttribute('d');
+  await wait(600);
+  const d2 = await S('.demo .demo-svg [data-p="armN"]').first().getAttribute('d');
+  assert.notEqual(d1, d2, 'demo animates');
+  await shot('16-exercise-demo');
+  // tap pauses
+  await S('.demo').first().click();
+  assert.ok(await S('.demo.is-paused').count());
+  // every exercise resolves to an animation
+  const missing = await page.evaluate(async () => {
+    const { EXERCISES } = await import('./src/data/exercises.js');
+    const { animFor } = await import('./src/data/animations.js');
+    return EXERCISES.filter((e) => !animFor(e.id)).map((e) => e.id);
+  });
+  assert.deepEqual(missing, []);
+});
+
 await step('equipment: adding a bench unlocks exercises; locked view shows requirement', async () => {
   await page.goto(`${BASE}#/exercises`);
   const before = await state(() => document.querySelectorAll('#x-results .item:not(.item--locked)').length);
