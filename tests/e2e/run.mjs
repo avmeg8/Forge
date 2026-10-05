@@ -524,6 +524,62 @@ await step('cloud backup: turn on, key shown, restore on a second phone', async 
   await ctx2.close();
 });
 
+/* ───────────── v1.4 features ───────────── */
+await step('effort: rate a set during rest; swap an exercise mid-workout', async () => {
+  const tid = await state(() => FORGE.store.state.templates[0].id);
+  await state((id) => FORGE.shared.startTemplate(FORGE, id), tid);
+  await S('.ex-title').waitFor();
+  // log until a rest screen with effort chips appears
+  for (let k = 0; k < 3 && !(await S('.rest .effort-chip').count()); k++) await tap('[data-action="s-log"]');
+  await S('.rest .effort-chip').first().waitFor();
+  await shot('40-rest-effort');
+  await tap('.rest [data-action="s-rir"][data-v="2"]');
+  const rir = await state(() => FORGE.store.state.active.sets.filter((x) => !x.warmup).at(-1).rir);
+  assert.equal(rir, 2);
+  await tap('[data-action="s-rest-skip"]');
+  const before = await state(() => { const a = FORGE.store.state.active; return { ex: a.items[a.current].exerciseId, n: a.items.length, cur: a.current }; });
+  await tap('[data-action="s-swap"]');
+  await S('.sheet [data-action="s-swap-pick"]').first().waitFor();
+  await shot('41-swap-sheet');
+  await tap('.sheet [data-action="s-swap-pick"]');
+  const after = await state(() => { const a = FORGE.store.state.active; return { ex: a.items[a.current].exerciseId, n: a.items.length, logged: a.sets.length }; });
+  assert.notEqual(after.ex, before.ex, 'exercise changed');
+  assert.ok(after.n >= before.n);
+  await state(() => FORGE.store.discardSession());
+});
+
+await step('history: fix a logged set in a finished workout', async () => {
+  const sid = await state(() => FORGE.store.done.at(-1).id);
+  await page.goto(`${BASE}#/summary/${sid}`);
+  await S('[data-action="sum-set"]').first().waitFor();
+  const first = await state((id) => { const s = FORGE.store.state.sessions.find((x) => x.id === id); return s.sets.find((x) => !x.warmup); }, sid);
+  await S(`[data-action="sum-set"][data-id="${first.id}"]`).click();
+  await wait(200);
+  await tap('.sheet [data-action="es-a-inc"]');
+  await tap('.sheet [data-action="es-rir"][data-v="1"]');
+  await shot('42-edit-set');
+  await tap('.sheet [data-action="es-save"]');
+  const fixed = await state(([id, setId]) => FORGE.store.state.sessions.find((x) => x.id === id).sets.find((x) => x.id === setId), [sid, first.id]);
+  const exMetric = await state((e) => window.FORGE && (FORGE.store.cfgFor(e), e), first.exerciseId);
+  assert.ok(exMetric);
+  assert.equal(fixed.rir, 1);
+  assert.ok((fixed.reps || 0) + (fixed.seconds || 0) > (first.reps || 0) + (first.seconds || 0) - 0.5);
+});
+
+await step('week in review: stats for this week, navigation to earlier weeks', async () => {
+  await page.goto(`${BASE}#/week`);
+  await S('.week-nav').waitFor();
+  const txt = await page.locator('main').innerText();
+  assert.match(txt, /This week/);
+  assert.match(txt, /training days/);
+  assert.match(txt, /XP/);
+  await shot('43-week');
+  await tap('[data-action="wk-go"][data-w="1"]');
+  assert.match(await page.locator('main').innerText(), /Last week/);
+  await page.goto(`${BASE}#/progress`);
+  await S('[data-href="#/week"]').waitFor();
+});
+
 await step('persistence: reload keeps workouts, history and settings', async () => {
   await page.reload();
   await wait(600);
@@ -557,7 +613,7 @@ await step('offline: app loads and works with no network', async () => {
 });
 
 await step('narrow Android widths: no horizontal scrolling (320/360/390/412)', async () => {
-  const routes = ['#/', '#/workouts', '#/workouts?tab=history', '#/progress', '#/exercises', '#/settings', '#/plan', `#/exercise/db_floor_press`];
+  const routes = ['#/', '#/workouts', '#/workouts?tab=history', '#/progress', '#/exercises', '#/settings', '#/plan', '#/week', `#/exercise/db_floor_press`];
   const tplId = await state(() => FORGE.store.state.templates[0].id);
   routes.push(`#/builder/${tplId}`);
   const bad = [];
