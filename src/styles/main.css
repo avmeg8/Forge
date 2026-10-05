@@ -440,3 +440,14 @@ button.mlevel:active { background: var(--surface-2); }
   .home-body { grid-template-columns: minmax(0, 40%) minmax(0, 1fr); gap: 8px; }
   .seg button { font-size: 11px; letter-spacing: .04em; }
 }
+
+/* ───────────────────────── exercise demos ───────────────────────── */
+.demo { position: relative; aspect-ratio: 4 / 3; background: radial-gradient(120% 90% at 50% 100%, #1b1f26, var(--bg-2)); border: 1px solid var(--line-soft); border-radius: var(--r); overflow: hidden; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.demo-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.demo--lg { width: 100%; max-height: 300px; margin: 0 auto; }
+.demo--thumb { width: 96px; flex: none; border-radius: 12px; }
+.demo-badge { position: absolute; left: 10px; top: 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; color: var(--muted); text-transform: uppercase; pointer-events: none; }
+.demo-play { position: absolute; inset: 0; display: grid; place-items: center; font-size: 30px; color: rgba(236,238,241,.85); opacity: 0; transition: opacity .2s; pointer-events: none; text-shadow: 0 2px 12px rgba(0,0,0,.6); }
+.demo.is-paused .demo-play { opacity: 1; }
+.demo.is-paused .demo-svg { opacity: .55; }
+@media (max-width: 340px) { .demo--thumb { width: 80px; } }
