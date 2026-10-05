@@ -162,7 +162,15 @@ window.addEventListener('hashchange', () => {
 });
 
 let pending = false;
-store.subscribe(() => {
+store.subscribe((info = {}) => {
+  // backup status ticks only matter on screens that show it
+  if (info.syncOnly) {
+    if (['settings', 'onboarding'].includes(current?.name) && !document.activeElement?.matches('input, textarea')) render(false);
+    if (sheet.isOpen && sheet.def.live) sheet.refresh();
+    return;
+  }
+  // don't yank a text field out from under the user when a sync lands
+  if (info.fromSync && document.activeElement?.matches('input, textarea')) return;
   if (pending) return;
   pending = true;
   queueMicrotask(() => {
@@ -221,6 +229,13 @@ new MutationObserver(() => {
   render(true);
   document.documentElement.classList.add('ready');
   registerSW();
+  // cloud backup: catch up when the connection returns or the app comes back to the foreground
+  window.addEventListener('online', () => store.syncNow());
+  document.addEventListener('visibilitychange', () => {
+    if (!store.sync?.enabled) return;
+    if (document.visibilityState === 'hidden') store.syncNow();
+    else if (Date.now() - (store.syncStatus.lastSyncAt || 0) > 60000) store.syncNow();
+  });
 })();
 
 window.FORGE = ctx; // handy for debugging and E2E tests
