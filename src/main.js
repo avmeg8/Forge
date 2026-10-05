@@ -18,8 +18,9 @@ import exercise from './screens/exercise.js';
 import settings from './screens/settings.js';
 import onboarding from './screens/onboarding.js';
 import plan from './screens/plan.js';
+import week from './screens/week.js';
 
-const screens = { home, workouts, builder, session, summary, progress, exercises, exercise, settings, onboarding, plan };
+const screens = { home, workouts, builder, session, summary, progress, exercises, exercise, settings, onboarding, plan, week };
 
 const ROUTES = [
   [/^\/?$/, 'home'],
@@ -32,6 +33,7 @@ const ROUTES = [
   [/^\/exercise\/([\w-]+)$/, 'exercise'],
   [/^\/settings$/, 'settings'],
   [/^\/plan$/, 'plan'],
+  [/^\/week$/, 'week'],
 ];
 
 const NAV = [
