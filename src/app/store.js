@@ -230,6 +230,15 @@ export class Store {
     this.emit();
   }
 
+  /** Save edits to a finished workout (fixing a set). Progress is re-derived automatically. */
+  async updateSession(session) {
+    const i = this.state.sessions.findIndex((x) => x.id === session.id);
+    if (i < 0) return;
+    this.state.sessions[i] = session;
+    await this.repo.saveSession(session);
+    this.emit();
+  }
+
   async deleteSession(id) {
     this.state.sessions = this.state.sessions.filter((s) => s.id !== id);
     await this.repo.deleteSession(id);
