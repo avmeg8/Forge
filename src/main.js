@@ -4,6 +4,8 @@
 import { store } from './app/store.js';
 import { sheet, toast, confirmSheet } from './components/overlay.js';
 import { icon } from './components/ui.js';
+import { mountDemos } from './components/demo.js';
+import { animFor } from './data/animations.js';
 import * as shared from './screens/shared.js';
 import home from './screens/home.js';
 import workouts from './screens/workouts.js';
@@ -191,6 +193,14 @@ function registerSW() {
     location.reload();
   });
 }
+
+/* ───────────── exercise demos: animate any .demo element that appears ───────────── */
+let demoQueued = false;
+new MutationObserver(() => {
+  if (demoQueued) return;
+  demoQueued = true;
+  requestAnimationFrame(() => { demoQueued = false; mountDemos(document, animFor); });
+}).observe(document.body, { childList: true, subtree: true });
 
 /* ───────────── boot ───────────── */
 (async function boot() {
