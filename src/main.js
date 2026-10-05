@@ -184,22 +184,18 @@ store.subscribe((info = {}) => {
 /* ───────────── service worker ───────────── */
 function registerSW() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('./service-worker.js').then((reg) => {
-    const offer = (w) => toast('A new version of FORGE is ready.', {
-      ms: 15000, action: { label: 'Reload', run: () => w.postMessage('skip-waiting') },
-    });
-    if (reg.waiting && navigator.serviceWorker.controller) offer(reg.waiting);
-    reg.addEventListener('updatefound', () => {
-      const w = reg.installing;
-      w?.addEventListener('statechange', () => {
-        if (w.state === 'installed' && navigator.serviceWorker.controller) offer(w);
-      });
-    });
+    if (reg.waiting) reg.waiting.postMessage('skip-waiting');
+    // check for a new release whenever the app comes back to the foreground
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
   }).catch((e) => console.warn('[FORGE] SW registration failed', e));
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloaded) return;
+    // first install: nothing to switch. Update: reload once so every file comes from the new version.
+    if (reloaded || !hadController) return;
     reloaded = true;
+    try { sessionStorage.setItem('forge-updated', '1'); } catch { /* ignore */ }
     location.reload();
   });
 }
@@ -218,7 +214,8 @@ new MutationObserver(() => {
     await store.init();
     navigator.storage?.persist?.().catch(() => {});
   } catch (e) {
-    main.innerHTML = `<div class="screen"><div class="card"><h2>FORGE couldn't open its storage</h2><p class="muted">${String(e.message || e)}</p></div></div>`;
+    window.__forgeReady = true;
+    main.innerHTML = `<div class="screen"><div class="card"><h2>FORGE couldn't open its storage</h2><p class="muted">${String(e.message || e)}</p><p class="small muted">Close FORGE completely (also from the recent-apps list) and open it again.</p></div></div>`;
     return;
   }
   // Resume an interrupted workout straight away.
@@ -228,7 +225,11 @@ new MutationObserver(() => {
   }
   render(true);
   document.documentElement.classList.add('ready');
+  window.__forgeReady = true;
   registerSW();
+  try {
+    if (sessionStorage.getItem('forge-updated')) { sessionStorage.removeItem('forge-updated'); toast('FORGE was updated to the latest version.', { kind: 'good' }); }
+  } catch { /* ignore */ }
   // cloud backup: catch up when the connection returns or the app comes back to the foreground
   window.addEventListener('online', () => store.syncNow());
   document.addEventListener('visibilitychange', () => {
