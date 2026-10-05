@@ -10,7 +10,11 @@ import { computeStreak } from '../engine/streak.js';
 import { activeProfile, capabilities, loadConfig } from '../engine/equipment.js';
 import { recommend } from '../engine/progression.js';
 import { rateWorkout } from '../engine/rating.js';
-import { ratePlan } from '../engine/plan.js';
+import { ratePlan, activeSchedule } from '../engine/plan.js';
+import { deloadState, deloadSets } from '../engine/deload.js';
+import { generateWorkout } from '../engine/generator.js';
+import { Sync } from '../storage/sync.js';
+import { startOfWeek } from '../utils/date.js';
 import { EXERCISE_BY_ID } from '../data/exercises.js';
 import { uid } from '../utils/id.js';
 
@@ -19,18 +23,33 @@ export class Store {
     this.listeners = new Set();
     this.version = 0;
     this.memo = {};
-    this.state = { settings: defaultSettings(), templates: [], sessions: [], active: null };
+    this.state = { settings: defaultSettings(), templates: [], sessions: [], measures: [], active: null };
+    this.syncStatus = { state: 'off' };
   }
 
-  async init(adapter) {
+  async init(adapter, { fetchImpl, autoSync = true } = {}) {
     this.repo = new Repository(adapter || (await createAdapter()));
     this.state = await this.repo.loadAll();
+    this.sync = new Sync(this.repo, {
+      fetchImpl,
+      onPulled: () => this.reload(),
+      onStatus: (st) => { this.syncStatus = st; this.listeners.forEach((fn) => fn({ syncOnly: true })); },
+    });
+    await this.sync.load();
     this.bump();
+    if (autoSync && this.sync.enabled) this.sync.schedule(800);
+  }
+
+  /** Re-read everything from storage (after a cloud sync brought in changes). */
+  async reload() {
+    this.state = await this.repo.loadAll();
+    this.bump();
+    this.listeners.forEach((fn) => fn({ fromSync: true }));
   }
 
   subscribe(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   bump() { this.version++; this.memo = {}; }
-  emit() { this.bump(); this.listeners.forEach((fn) => fn()); }
+  emit() { this.bump(); this.listeners.forEach((fn) => fn()); this.sync?.schedule(); }
 
   memoize(key, fn) {
     if (!(key in this.memo)) this.memo[key] = fn();
@@ -62,10 +81,55 @@ export class Store {
   rateTemplate(t) {
     return this.rate(t.items, t.targetMinutes, t.focus || 'auto', t.customMuscles || []);
   }
-  /** Workouts in the weekly plan (all saved workouts unless excluded). */
-  get planTemplates() { return this.state.templates.filter((t) => t.inPlan !== false && t.items.length); }
+  /** Weekday → template id, only for workouts that still exist. */
+  get schedule() { return this.memoize('schedule', () => activeSchedule(this.settings.schedule, this.state.templates)); }
+  get hasSchedule() { return Object.keys(this.schedule).length > 0; }
+  /** Workouts in the weekly plan: the scheduled ones, or every saved workout unless excluded. */
+  get planTemplates() {
+    if (this.hasSchedule) return [...new Set(Object.values(this.schedule))].map((id) => this.template(id)).filter(Boolean);
+    return this.state.templates.filter((t) => t.inPlan !== false && t.items.length);
+  }
   get plan() {
-    return this.memoize('plan', () => ratePlan(this.planTemplates, { settings: this.settings, rateTemplate: (t) => this.rateTemplate(t) }));
+    return this.memoize('plan', () => ratePlan(this.planTemplates, { settings: this.settings, allTemplates: this.state.templates, rateTemplate: (t) => this.rateTemplate(t) }));
+  }
+  /** Scheduled workout for a given day (default today), or null. */
+  scheduledFor(t = Date.now()) {
+    const id = this.schedule[new Date(t).getDay()];
+    return id ? this.template(id) : null;
+  }
+  get deload() {
+    return this.memoize('deload', () => deloadState(this.settings, this.done.map((s) => s.startedAt), Date.now()));
+  }
+  async startDeload() {
+    const wk = startOfWeek(Date.now(), this.settings.weekStart ?? 1);
+    await this.saveSettings({ deloadWeek: wk, deloadLast: wk, deloadSnooze: null });
+  }
+  async endDeload() { await this.saveSettings({ deloadWeek: null }); }
+  async snoozeDeload() { await this.saveSettings({ deloadSnooze: startOfWeek(Date.now(), this.settings.weekStart ?? 1) }); }
+
+  /** "Build it for me" — see engine/generator.js */
+  generate({ focus, customMuscles, minutes, supersets, seed }) {
+    return generateWorkout({
+      focus, customMuscles, minutes, supersets, seed,
+      rateCtx: { settings: this.settings, profile: this.profile, caps: this.caps, progress: this.progress },
+      makeItem: (id, o) => this.makeItem(id, o),
+    });
+  }
+
+  /* ───────────── body weight ───────────── */
+  get measures() { return this.state.measures || []; }
+  get bodyWeight() { const m = this.measures; return m.length ? m[m.length - 1] : null; }
+  async addMeasure(kgValue, t = Date.now()) {
+    const m = { id: uid('m'), t, kg: Math.round(kgValue * 10) / 10, createdAt: Date.now() };
+    this.state.measures = [...this.measures, m].sort((a, b) => a.t - b.t);
+    await this.repo.saveMeasure(m);
+    this.emit();
+    return m;
+  }
+  async deleteMeasure(id) {
+    this.state.measures = this.measures.filter((m) => m.id !== id);
+    await this.repo.deleteMeasure(id);
+    this.emit();
   }
   /** "NEXT TIME" recommendation based on the latest session containing the exercise. */
   recommendationFor(exerciseId, target, excludeSessionId) {
@@ -117,11 +181,12 @@ export class Store {
 
   /* ───────────── sessions ───────────── */
   async startSession(template) {
-    const items = template.items.map((it) => ({ ...it }));
+    const deload = this.deload.state === 'active';
+    const items = template.items.map((it) => ({ ...it, ...(deload ? { sets: deloadSets(it.sets), plannedSets: it.sets } : {}) }));
     const session = {
       id: uid('s'), templateId: template.id || null, name: template.name || 'Workout',
       startedAt: Date.now(), status: 'active', items, sets: [], current: 0, drafts: {}, rest: null,
-      targetMinutes: template.targetMinutes,
+      targetMinutes: template.targetMinutes, ...(deload ? { deload: true } : {}),
       ratingAtStart: (() => { const r = this.rateTemplate({ ...template, items }); return { score: r.score, grade: r.grade, label: r.label, split: r.split?.name }; })(),
     };
     this.state.active = session;
@@ -174,7 +239,22 @@ export class Store {
   /* ───────────── backup ───────────── */
   async exportJson() { return this.repo.exportAll(); }
   async importJson(data) { await this.repo.importAll(data); this.state = await this.repo.loadAll(); this.emit(); }
-  async resetAll() { await this.repo.reset(); this.state = await this.repo.loadAll(); this.emit(); }
+  async resetAll() {
+    await this.sync.disable();
+    await this.repo.reset();
+    this.state = await this.repo.loadAll();
+    this.emit();
+  }
+
+  /* ───────────── cloud backup ───────────── */
+  async enableBackup() { await this.sync.enable(); this.emit(); return this.sync.key; }
+  async connectBackup(key) {
+    const res = await this.sync.connect(key, { preferRemote: true });
+    await this.reload();
+    return res;
+  }
+  async disableBackup() { await this.sync.disable(); this.emit(); }
+  syncNow() { return this.sync.now(); }
 }
 
 export const store = new Store();
