@@ -75,8 +75,11 @@ export function toast(html, { kind = '', ms = 2600, action = null } = {}) {
   t.setAttribute('role', 'status');
   t.innerHTML = html + (action ? `<button class="toast-action">${esc(action.label)}</button>` : '');
   if (action) t.querySelector('.toast-action').addEventListener('click', () => { action.run(); t.remove(); });
+  // a new message replaces older plain ones, so toasts never pile up over the screen
+  for (const old of [...root.children]) if (!old.matches('.toast--pr') && !old.querySelector('.toast-action')) old.remove();
   root.append(t);
-  while (root.children.length > 3) root.firstChild.remove();
+  while (root.children.length > 2) root.firstChild.remove();
+  t.addEventListener('click', (e) => { if (!e.target.closest('.toast-action')) t.remove(); });
   setTimeout(() => { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, ms);
 }
 

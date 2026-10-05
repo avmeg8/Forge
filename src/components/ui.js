@@ -31,6 +31,12 @@ export const icon = {
   bolt: s('<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>'),
   alert: s('<path d="M12 3 2 21h20L12 3z"/><path d="M12 10v5M12 18v.01"/>'),
   skip: s('<path d="M5 5l10 7-10 7zM19 5v14"/>'),
+  cloud: s('<path d="M7 18a5 5 0 1 1 1.2-9.86A6 6 0 0 1 19.5 10.5 3.75 3.75 0 0 1 18 18H7z"/>'),
+  link: s('<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>'),
+  calendar: s('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>'),
+  spark: s('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>'),
+  scale: s('<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8.5 9a5 5 0 0 1 7 0l-2.2 2.6a1.7 1.7 0 0 0-2.6 0z"/>'),
+  feather: s('<path d="M20 4c-6 0-11 4-12.5 10.5L6 20"/><path d="M8 14h6l5-5"/>'),
   dumbbell: s('<path d="M6.5 6.5v11M17.5 6.5v11M3.5 9v6M20.5 9v6M6.5 12h11"/>'),
 };
 
