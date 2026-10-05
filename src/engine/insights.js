@@ -72,6 +72,7 @@ export function recentProgress(progress, sessions, limit = 4) {
     for (const lu of res.levelUps) out.push({ kind: 'level', big: `Level ${lu.to}`, text: MUSCLE_BY_ID[lu.muscle].name, t: s.startedAt });
     const seen = new Set();
     for (const set of s.sets) {
+      if (set.warmup) continue;
       if (seen.has(set.exerciseId)) continue;
       seen.add(set.exerciseId);
       const ex = EXERCISE_BY_ID[set.exerciseId];
