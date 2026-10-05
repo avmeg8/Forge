@@ -5,6 +5,54 @@ import { MUSCLES } from '../data/muscles.js';
 import { weakMuscles, balanceObservations } from '../engine/insights.js';
 import { esc, num } from '../utils/format.js';
 import { mapValues, muscleLevelRow } from './shared.js';
+import { lineChart } from '../components/charts.js';
+import { kg } from '../utils/format.js';
+import { shortDate, DAY } from '../utils/date.js';
+
+function bodyWeightCard(ctx) {
+  const m = ctx.store.measures;
+  if (!m.length) {
+    return `<div class="card row" style="gap:12px"><span class="feature-ic">${icon.scale}</span>
+      <div class="grow"><div class="item-title">Track your body weight</div><div class="small text-2">Log it now and then to see the trend.</div></div>
+      <button class="btn btn--sm btn--primary" data-action="p-bw">Log</button></div>`;
+  }
+  const last = m[m.length - 1];
+  const ref = [...m].reverse().find((x) => x.t <= last.t - 25 * DAY);
+  const diff = ref ? Math.round((last.kg - ref.kg) * 10) / 10 : null;
+  return `<div class="card">
+    <div class="row row--between"><div><div class="num" style="font-size:26px;font-weight:800">${kg(last.kg)}<small class="muted" style="font-size:14px;font-weight:600"> kg</small></div>
+      <div class="small muted">${esc(shortDate(last.t))}${diff != null ? ` · ${diff > 0 ? '+' : ''}${kg(diff)} kg in a month` : ''}</div></div>
+      <button class="btn btn--sm btn--primary" data-action="p-bw">${icon.plus} Log</button></div>
+    ${m.length > 1 ? `<div class="mt-12">${lineChart(m.map((x) => ({ t: x.t, v: x.kg })), { label: 'Body weight trend', fmt: (v) => kg(Math.round(v * 10) / 10) })}</div>` : ''}
+  </div>`;
+}
+
+function bodyWeightSheet(ctx) {
+  const st = { value: ctx.store.bodyWeight?.kg ?? '' };
+  ctx.sheet.open({
+    title: 'Body weight',
+    live: true,
+    render: () => {
+      const m = [...ctx.store.measures].reverse();
+      return `<div class="row" style="gap:8px"><label class="grow"><span class="sr-only">Body weight in kg</span>
+        <input class="input num" id="bw-input" type="number" inputmode="decimal" step="0.1" min="20" max="300" placeholder="e.g. 78.5" value="${st.value}"></label>
+        <span class="muted">kg</span><button class="btn btn--primary" data-action="bw-save">Save</button></div>
+        <p class="tiny muted mt-8">Weigh yourself at a similar time of day (e.g. mornings) for a cleaner trend.</p>
+        ${m.length ? `<p class="eyebrow mt-16">History</p><div class="card card--flush mt-8">${m.slice(0, 30).map((x) => `<div class="eq-row"><span class="grow num">${kg(x.kg)} kg</span><span class="small muted">${esc(shortDate(x.t))}</span>
+          <button class="icon-btn" data-action="bw-del" data-id="${x.id}" aria-label="Delete ${kg(x.kg)} kg on ${esc(shortDate(x.t))}">${icon.trash}</button></div>`).join('')}</div>` : ''}`;
+    },
+    actions: {
+      'bw-save': async () => {
+        const v = Number(document.getElementById('bw-input')?.value);
+        if (!(v >= 20 && v <= 300)) { ctx.toast('Enter a weight between 20 and 300 kg.'); return; }
+        st.value = v;
+        await ctx.store.addMeasure(v);
+        ctx.toast(`Logged ${kg(v)} kg.`, { kind: 'good' });
+      },
+      'bw-del': (c, el) => ctx.store.deleteMeasure(el.dataset.id),
+    },
+  });
+}
 
 const SORTS = {
   level: ['Level', (a, b) => b.s.xp - a.s.xp],
@@ -34,7 +82,7 @@ export default {
     const { store } = ctx;
     const p = store.progress;
     const done = store.done;
-    const totalSets = done.reduce((a, s) => a + s.sets.length, 0);
+    const totalSets = done.reduce((a, s) => a + s.sets.filter((x) => !x.warmup).length, 0);
     const weekXp = MUSCLES.reduce((a, m) => a + p.muscles[m.id].weekXp, 0);
     const avgLevel = MUSCLES.reduce((a, m) => a + p.muscles[m.id].info.level, 0) / MUSCLES.length;
 
@@ -63,6 +111,7 @@ export default {
       </div>
       ${!done.length ? `<p class="small muted mt-12 center">All 18 muscles start at Beginner · Level 1. Finish a workout and watch them develop.</p>` : ''}
       ${insights}
+      <section class="section"><p class="eyebrow">Body weight</p><div class="mt-8">${bodyWeightCard(ctx)}</div></section>
       <section class="section"><div class="section-head"><p class="eyebrow">Muscle levels</p>
         <label class="small muted row" style="gap:6px">Sort <select class="input" style="min-height:36px;width:auto;font-size:13.5px;padding:0 30px 0 10px;background-position:calc(100% - 14px) 15px, calc(100% - 9px) 15px" data-change="p-sort" aria-label="Sort muscles">
           ${Object.entries(SORTS).map(([k, [n]]) => `<option value="${k}" ${u.sort === k ? 'selected' : ''}>${n}</option>`).join('')}</select></label></div>
@@ -84,6 +133,7 @@ export default {
       document.querySelectorAll('[data-action="p-view"]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === u.view)));
     },
     'p-mode': (ctx, el) => { ui(ctx).mode = el.dataset.v; ctx.render(); },
+    'p-bw': (ctx) => bodyWeightSheet(ctx),
   },
   changes: {
     'p-sort': (ctx, el) => { ui(ctx).sort = el.value; ctx.render(); },

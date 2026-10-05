@@ -33,10 +33,11 @@ export default {
       ${fresh ? '<p class="eyebrow" style="color:var(--good)">Workout complete</p>' : `<p class="eyebrow">${esc(dayHeading(s.startedAt))}</p>`}
       <h2 style="margin:6px 0 14px;font-size:22px">${esc(s.name)}</h2>
       <div class="stat-grid">
-        <div class="stat"><b>${Math.max(1, Math.round(((s.endedAt || s.startedAt) - s.startedAt) / 60000))}</b><span>minutes</span></div>
-        <div class="stat"><b>${s.sets.length}</b><span>sets</span></div>
+        ${(() => { const mins = Math.max(1, Math.round(((s.endedAt || s.startedAt) - s.startedAt) / 60000)); return `<div class="stat"><b>${mins}</b><span>${mins === 1 ? 'minute' : 'minutes'}</span></div>`; })()}
+        <div class="stat"><b>${s.sets.filter((x) => !x.warmup).length}</b><span>sets</span></div>
         <div class="stat"><b style="color:var(--accent-2)">+${num(res.totalXp)}</b><span>XP</span></div>
       </div>
+      ${s.deload ? `<p class="small muted mt-12" style="margin-bottom:0">🪶 Deload-week session — lighter on purpose.</p>` : ''}
       ${s.ratingAtStart ? `<p class="small muted mt-12" style="margin-bottom:0">Workout rating: <b class="text-2">${s.ratingAtStart.score}/100 · ${esc(s.ratingAtStart.label)}${s.ratingAtStart.split ? ` ${esc(s.ratingAtStart.split.toLowerCase())} workout` : ""}</b></p>` : ''}
     </div>`;
 
@@ -63,7 +64,9 @@ export default {
       const ex = EXERCISE_BY_ID[g.exerciseId];
       if (!ex) return '';
       const item = s.items?.[g.itemIndex] || {};
-      const r = recommend(ex.id, g.sets, { sets: item.sets || ex.sets, repMin: item.repMin, repMax: item.repMax }, store.cfgFor(ex.id));
+      const work = g.sets.filter((x) => !x.warmup);
+      if (!work.length) return '';
+      const r = recommend(ex.id, work, { sets: item.sets || ex.sets, repMin: item.repMin, repMax: item.repMax }, store.cfgFor(ex.id));
       return `<div class="card"><div class="row row--between"><b>${esc(ex.name)}</b><span class="tag ${r.action === 'increase' ? 'tag--good' : r.action === 'max' ? 'tag--accent' : ''}">${esc(r.headline)}</span></div>
         <p class="small text-2" style="margin:6px 0 0">${esc(r.text)}</p>
         ${r.alternatives ? `<ul class="ul small mt-8">${r.alternatives.slice(0, 3).map((a) => `<li>${esc(a.text)}</li>`).join('')}</ul>` : ''}</div>`;
@@ -72,9 +75,10 @@ export default {
     const detail = `<section class="section"><p class="eyebrow">Sets</p><div class="stack mt-8">${groups.map((g) => {
       const ex = EXERCISE_BY_ID[g.exerciseId];
       if (!ex) return '';
-      const bal = sideBalance(ex, g.sets);
-      return `<div class="card"><div class="row row--between"><button class="link" style="padding:0;font-size:15px;color:var(--text)" data-action="go" data-href="#/exercise/${ex.id}">${esc(ex.name)}</button><span class="small muted">${plural(g.sets.length, 'set')}</span></div>
-        <div class="mt-8 small num text-2">${g.sets.map((x) => `<div class="row row--between"><span>${x.side ? `<span class="tag" style="min-width:52px;justify-content:center">${x.side === 'L' ? 'LEFT' : 'RIGHT'}</span> ` : ''}${esc(setLabel(x, ex))}</span><span class="muted">+${Math.round(res.setXp?.[x.id] || 0)} XP</span></div>`).join('')}</div>
+      const work = g.sets.filter((x) => !x.warmup);
+      const bal = sideBalance(ex, work);
+      return `<div class="card"><div class="row row--between"><button class="link" style="padding:0;font-size:15px;color:var(--text)" data-action="go" data-href="#/exercise/${ex.id}">${esc(ex.name)}</button><span class="small muted">${plural(work.length, 'set')}</span></div>
+        <div class="mt-8 small num text-2">${g.sets.map((x) => `<div class="row row--between"><span>${x.warmup ? `<span class="tag" style="min-width:52px;justify-content:center">WARM-UP</span> ` : x.side ? `<span class="tag" style="min-width:52px;justify-content:center">${x.side === 'L' ? 'LEFT' : 'RIGHT'}</span> ` : ''}${esc(setLabel(x, ex))}</span><span class="muted">${x.warmup ? '—' : `+${Math.round(res.setXp?.[x.id] || 0)} XP`}</span></div>`).join('')}</div>
         ${bal && bal.level !== 'even' ? `<p class="balance-note ${bal.level}">${esc(bal.text)}</p>` : ''}</div>`;
     }).join('')}</div></section>`;
 

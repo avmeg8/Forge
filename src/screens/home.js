@@ -8,10 +8,19 @@ import { totals } from '../engine/session.js';
 import { esc, plural } from '../utils/format.js';
 import { greeting, relativeDay } from '../utils/date.js';
 import { mapValues } from './shared.js';
+import { WEEKDAYS } from '../engine/plan.js';
+import { backupActions } from './backup.js';
 
 export default {
   tab: 'home',
   title: 'Home',
+  actions: {
+    'h-deload-start': async (ctx) => { await ctx.store.startDeload(); ctx.toast('Deload week on — workouts this week start lighter.', { kind: 'good' }); },
+    'h-deload-snooze': async (ctx) => { await ctx.store.snoozeDeload(); ctx.toast('Okay — FORGE will ask again next week.'); },
+    'h-deload-end': async (ctx) => { await ctx.store.endDeload(); ctx.toast('Deload ended — back to normal training.'); },
+    'h-backup-dismiss': (ctx) => ctx.store.saveSettings({ backupNudgeDismissed: Date.now() }),
+    'bk-on': backupActions['bk-on'],
+  },
   render(ctx) {
     const { store } = ctx;
     const p = store.progress;
@@ -28,6 +37,7 @@ export default {
           <p class="small muted" style="margin:-8px 0 14px">${t.done} of ${t.planned} sets · started ${new Date(active.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
           <button class="btn btn--primary btn--lg btn--block" data-action="go" data-href="#/session">Resume workout</button></div>`;
       })()
+      : store.hasSchedule ? scheduledHero(ctx)
       : `<div class="card card--accent hero">
           <p class="greet">${greeting()}</p>
           <h2>Ready to train?</h2>
@@ -75,6 +85,8 @@ export default {
       <header class="appbar"><div class="brand">${brandMark}<span class="brand-name">FORGE</span></div>
         <button class="icon-btn" data-action="go" data-href="#/settings" aria-label="Settings">${icon.gear}</button></header>
       ${hero}
+      ${deloadCard(ctx)}
+      ${backupNudge(ctx)}
       <section class="section"><div class="section-head"><p class="eyebrow">Streak</p></div>${streakCard}</section>
       <section class="section"><div class="section-head"><p class="eyebrow">Your body</p><button class="link" data-action="go" data-href="#/progress">Progress</button></div>${body}</section>
       ${focus}
@@ -96,4 +108,63 @@ function nextUp(ctx) {
     ${scoreBadge(r)}<div class="grow"><div class="tiny muted" style="letter-spacing:.1em;text-transform:uppercase;font-weight:700">Suggested today</div>
     <div class="item-title ellipsis">${esc(t.name)}</div><div class="item-sub ellipsis">${esc(muscles)}${t.lastPerformedAt ? ` · last ${esc(relativeDay(t.lastPerformedAt).toLowerCase())}` : ''}</div></div>
     ${icon.play.replace('<svg', '<svg style="width:22px;color:var(--accent);flex:none"')}</button>`;
+}
+
+function scheduledHero(ctx) {
+  const { store } = ctx;
+  const t = store.scheduledFor();
+  if (t) {
+    const r = store.rateTemplate(t);
+    const doneToday = t.lastPerformedAt && new Date(t.lastPerformedAt).toDateString() === new Date().toDateString();
+    return `<div class="card card--accent hero">
+      <p class="greet">${greeting()} ${doneToday ? 'Done for today.' : 'Today is'}</p>
+      <h2>${esc(t.name)}</h2>
+      <p class="small muted" style="margin:-8px 0 14px">${esc(r.split.name)} · ${plural(t.items.length, 'exercise')} · ~${r.estimatedMinutes} min</p>
+      ${doneToday
+        ? `<button class="btn btn--lg btn--block" data-action="open-start">${icon.play} Train again</button>`
+        : `<button class="btn btn--primary btn--lg btn--block" data-action="start-template" data-id="${t.id}">${icon.play} Start ${esc(t.name)}</button>
+           <button class="link center mt-12" style="display:block;margin:12px auto 0" data-action="open-start">Do a different workout</button>`}
+    </div>`;
+  }
+  // rest day: show the next scheduled workout
+  let next = null;
+  for (let k = 1; k <= 7 && !next; k++) {
+    const d = (new Date().getDay() + k) % 7;
+    const id = store.schedule[d];
+    if (id) next = { t: store.template(id), day: k === 1 ? 'Tomorrow' : WEEKDAYS[d] };
+  }
+  return `<div class="card card--accent hero">
+    <p class="greet">${greeting()}</p>
+    <h2>Rest day</h2>
+    <p class="small text-2" style="margin:-8px 0 14px">Recovery is when muscles grow.${next ? ` Next up: <b>${esc(next.t.name)}</b> · ${esc(next.day)}.` : ''}</p>
+    <button class="btn btn--block" data-action="open-start">${icon.play} Train anyway</button>
+  </div>`;
+}
+
+function deloadCard(ctx) {
+  const d = ctx.store.deload;
+  if (d.state === 'due') {
+    return `<section class="section"><div class="card card--deload">
+      <div class="row" style="gap:12px;align-items:flex-start"><span class="feature-ic">${icon.feather}</span><div class="grow">
+        <div class="item-title">Time for a deload week</div>
+        <p class="small text-2" style="margin:4px 0 0">${d.trainedWeeks} weeks of hard training. A lighter week — about 40% fewer sets and 10% less weight — lets your joints and muscles catch up, so you come back stronger.</p></div></div>
+      <div class="btn-row mt-12"><button class="btn btn--primary" data-action="h-deload-start">Start deload</button><button class="btn" data-action="h-deload-snooze">Not now</button></div>
+    </div></section>`;
+  }
+  if (d.state === 'active') {
+    return `<section class="section"><div class="card card--deload row" style="gap:12px">
+      <span class="feature-ic">${icon.feather}</span><div class="grow"><div class="item-title">Deload week</div><div class="small text-2">Workouts start lighter this week. Normal training returns next week.</div></div>
+      <button class="btn btn--sm" data-action="h-deload-end">End</button></div></section>`;
+  }
+  return '';
+}
+
+function backupNudge(ctx) {
+  const { store } = ctx;
+  if (store.sync?.enabled || store.done.length < 3 || store.settings.backupNudgeDismissed) return '';
+  return `<section class="section"><div class="card row" style="gap:12px;align-items:flex-start">
+    <span class="feature-ic">${icon.cloud}</span><div class="grow"><div class="item-title">Back up your progress</div>
+    <p class="small text-2" style="margin:4px 0 10px">${store.done.length} workouts are stored only on this phone. Cloud backup keeps them safe and moves them to a new phone.</p>
+    <button class="btn btn--sm btn--primary" data-action="bk-on">Turn on backup</button></div>
+    <button class="icon-btn" data-action="h-backup-dismiss" aria-label="Dismiss">${icon.close}</button></div></section>`;
 }

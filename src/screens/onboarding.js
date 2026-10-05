@@ -4,6 +4,7 @@ import { FREQ_LIST } from '../engine/streak.js';
 import { defaultProfile } from '../data/equipment.js';
 import { detectWeekStart } from '../utils/date.js';
 import { esc } from '../utils/format.js';
+import { restoreSheet } from './backup.js';
 
 function ui(ctx) {
   return (ctx.ui.onb ||= { step: 'setup', experience: 'beginner', min: 2, max: 30, inc: 1, frequency: '4', error: '' });
@@ -56,9 +57,18 @@ export default {
 
       <div style="flex:1;min-height:24px"></div>
       <button class="btn btn--primary btn--lg btn--block" data-action="onb-next">Continue</button>
+      <button class="link center mt-12" style="display:block;margin-left:auto;margin-right:auto" data-action="onb-restore">Already use FORGE? Restore from backup</button>
     </div>`;
   },
   actions: {
+    'onb-restore': (ctx) => restoreSheet(ctx, {
+      onDone: () => {
+        delete ctx.ui.onb;
+        if (!ctx.store.settings.onboarded) ctx.store.saveSettings({ onboarded: true });
+        ctx.go('#/', { replace: true });
+        ctx.render();
+      },
+    }),
     'onb-exp': (ctx, el) => { ui(ctx).experience = el.dataset.v; ctx.render(); },
     'onb-freq': (ctx, el) => { ui(ctx).frequency = el.dataset.v; ctx.render(); },
     'onb-next': (ctx) => {

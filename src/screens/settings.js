@@ -8,6 +8,8 @@ import { esc, kg, num } from '../utils/format.js';
 import { uid } from '../utils/id.js';
 import { validate } from './onboarding.js';
 import * as shared from './shared.js';
+import { backupCard, backupActions } from './backup.js';
+import { DELOAD_OPTIONS } from '../engine/deload.js';
 
 const REST = [['exercise', 'Per exercise'], ['60', '60 s'], ['90', '90 s'], ['120', '2 min'], ['180', '3 min']];
 
@@ -126,20 +128,23 @@ export default {
       <section class="section"><p class="eyebrow">Training days per week</p><div class="mt-8">${seg('st-freq', s.frequency, FREQ_LIST.map((f) => [f.id, f.label]))}</div>
         <p class="small muted mt-8">Your streak counts training days. Rest days never break it.</p></section>
       <section class="section"><p class="eyebrow">Default workout length</p><div class="mt-8">${seg('st-len', s.targetMinutes, [[30, '30'], [45, '45'], [60, '60'], [75, '75'], [90, '90']])}</div></section>
+      <section class="section"><p class="eyebrow">Deload week every</p><div class="mt-8">${seg('st-deload', s.deloadEvery ?? 6, DELOAD_OPTIONS)}</div>
+        <p class="small muted mt-8">A planned lighter week — fewer sets, a little less weight — after a block of hard training. Only weeks you train count.</p></section>
       <section class="section"><p class="eyebrow">Rest timer</p><div class="mt-8">${seg('st-rest', s.restMode, REST)}</div></section>
       <section class="section"><p class="eyebrow">Week starts on</p><div class="mt-8">${seg('st-week', s.weekStart, [[0, 'Sunday'], [1, 'Monday']])}</div></section>
       <section class="section"><p class="eyebrow">Rest timer alerts</p><div class="card card--flush mt-8">
         <div class="eq-row"><span class="grow item-title">Sound</span>${sw('st-sound', s.sound !== false, 'Sound')}</div>
         <div class="eq-row"><span class="grow item-title">Vibration</span>${sw('st-vib', s.vibrate !== false, 'Vibration')}</div></div></section>
       ${equipmentSection(ctx)}
-      <section class="section"><p class="eyebrow">Your data</p>
-        <div class="card"><p class="small muted" style="margin-top:0">Everything is stored on this device and works offline. Export a backup to move devices or keep a copy.</p>
-        <div class="btn-row"><button class="btn" data-action="st-export">Export backup</button><label class="btn" style="cursor:pointer">Import<input type="file" accept="application/json,.json" data-change="st-import" class="sr-only"></label></div>
+      <section class="section" id="backup"><p class="eyebrow">Cloud backup</p><div class="mt-8">${backupCard(ctx)}</div></section>
+      <section class="section"><p class="eyebrow">Backup file</p>
+        <div class="card"><p class="small muted" style="margin-top:0">FORGE works offline and keeps everything on this phone. You can also save a backup file yourself.</p>
+        <div class="btn-row"><button class="btn" data-action="st-export">Export file</button><label class="btn" style="cursor:pointer">Import file<input type="file" accept="application/json,.json" data-change="st-import" class="sr-only"></label></div>
         <button class="btn btn--danger btn--block mt-12" data-action="st-reset">Reset all data</button></div></section>
       <section class="section"><p class="eyebrow">About</p><div class="card">
         <button class="link" style="padding:0" data-action="st-xp">How levels &amp; XP work</button>
         <p class="safety mt-12">${esc(SAFETY_TEXT)} If you feel pain, stop the exercise. If it persists, consult a qualified healthcare professional.</p>
-        <p class="tiny muted mt-12" style="margin-bottom:0">FORGE 1.0 · Build. Train. Level Up.</p></div></section>`;
+        <p class="tiny muted mt-12" style="margin-bottom:0">FORGE 1.3 · Build. Train. Level Up.</p></div></section>`;
   },
   actions: {
     'st-exp': (ctx, el) => ctx.store.saveSettings({ experience: el.dataset.v }),
@@ -147,6 +152,8 @@ export default {
     'st-len': (ctx, el) => ctx.store.saveSettings({ targetMinutes: Number(el.dataset.v) }),
     'st-rest': (ctx, el) => ctx.store.saveSettings({ restMode: el.dataset.v === 'exercise' ? 'exercise' : Number(el.dataset.v) }),
     'st-week': (ctx, el) => ctx.store.saveSettings({ weekStart: Number(el.dataset.v) }),
+    'st-deload': (ctx, el) => ctx.store.saveSettings({ deloadEvery: Number(el.dataset.v) }),
+    ...backupActions,
     'st-sound': (ctx) => ctx.store.saveSettings({ sound: ctx.store.settings.sound === false }),
     'st-vib': (ctx) => ctx.store.saveSettings({ vibrate: ctx.store.settings.vibrate === false }),
     'st-xp': (ctx) => xpSheet(ctx),
@@ -208,7 +215,7 @@ export default {
       ctx.toast('Backup exported.');
     },
     'st-reset': async (ctx) => {
-      const ok = await ctx.confirm({ title: 'Reset all data?', text: 'This permanently deletes every workout, set, level and setting on this device. Export a backup first if you might want it.', confirm: 'Delete everything', danger: true });
+      const ok = await ctx.confirm({ title: 'Reset all data?', text: 'This permanently deletes every workout, set, level and setting on this phone and turns off cloud backup here. The cloud copy is kept — you can restore it with your backup key.', confirm: 'Delete everything', danger: true });
       if (!ok) return;
       await ctx.store.resetAll();
       ctx.ui = {};

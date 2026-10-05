@@ -1,6 +1,7 @@
 /** Workouts — my saved workouts + training history. */
 import { appbar, icon, scoreBadge, empty } from '../components/ui.js';
 import { planCard } from './plan.js';
+import { openGenerator } from './generate.js';
 import { esc, plural, duration, num } from '../utils/format.js';
 import { dayHeading, dayKey, relativeDay } from '../utils/date.js';
 
@@ -27,6 +28,7 @@ export default {
       await ctx.store.saveTemplate(t);
       ctx.go(`#/builder/${t.id}`);
     },
+    'w-gen': (ctx) => openGenerator(ctx),
     'w-more': (ctx, el) => {
       const t = ctx.store.template(el.dataset.id);
       if (!t) return;
@@ -41,7 +43,7 @@ export default {
           'w-edit': () => { ctx.sheet.close(); ctx.go(`#/builder/${t.id}`); },
           'w-plan': async () => { t.inPlan = t.inPlan === false; await ctx.store.saveTemplate(t); ctx.sheet.close(); ctx.toast(t.inPlan ? 'Added to your weekly plan.' : 'Removed from your weekly plan.'); },
           'w-dup': async () => {
-            const copy = ctx.store.newTemplate(`${t.name} (copy)`, t.items.map((i) => ctx.store.makeItem(i.exerciseId, { sets: i.sets, repMin: i.repMin, repMax: i.repMax, weight: i.weight })));
+            const copy = ctx.store.newTemplate(`${t.name} (copy)`, t.items.map((i) => ctx.store.makeItem(i.exerciseId, { sets: i.sets, repMin: i.repMin, repMax: i.repMax, weight: i.weight, ...(i.group ? { group: i.group } : {}) })));
             copy.focus = t.focus || 'auto'; copy.customMuscles = [...(t.customMuscles || [])];
             copy.targetMinutes = t.targetMinutes;
             await ctx.store.saveTemplate(copy);
@@ -62,11 +64,12 @@ export default {
 function mine(ctx) {
   const { store } = ctx;
   const list = store.state.templates;
-  const newBtn = `<button class="btn btn--primary btn--block" data-action="w-new">${icon.plus} New workout</button>`;
+  const newBtn = `<div class="btn-row" style="display:flex;gap:8px"><button class="btn btn--primary" data-action="w-gen" style="flex:1">${icon.spark} Build it for me</button>
+    <button class="btn" data-action="w-new" style="flex:1">${icon.plus} Start from scratch</button></div>`;
   if (!list.length) {
     return empty({
       title: 'Build your first workout',
-      text: 'Pick exercises for your dumbbell, and FORGE rates the workout as you build it.',
+      text: 'Let FORGE build one for your equipment, or pick the exercises yourself — it rates the workout as you build it.',
       action: newBtn,
     });
   }
@@ -96,7 +99,7 @@ function history(ctx) {
     const res = p.sessions[s.id];
     out += `<button class="item mt-8" data-action="go" data-href="#/summary/${s.id}">
       <div class="grow"><div class="item-title ellipsis">${esc(s.name)}</div>
-      <div class="item-sub num">${duration((s.endedAt || s.startedAt) - s.startedAt)} · ${plural(s.sets.length, 'set')}${res ? ` · +${num(res.totalXp)} XP` : ''}${res?.prs.length ? ` · 🏆 ${res.prs.length}` : ''}</div></div>
+      <div class="item-sub num">${duration((s.endedAt || s.startedAt) - s.startedAt)} · ${plural(s.sets.filter((x) => !x.warmup).length, 'set')}${res ? ` · +${num(res.totalXp)} XP` : ''}${res?.prs.length ? ` · 🏆 ${res.prs.length}` : ''}</div></div>
       ${icon.chev.replace('<svg', '<svg class="chev"')}</button>`;
   }
   return out;

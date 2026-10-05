@@ -169,9 +169,7 @@ export function openStartPicker(ctx) {
   if (store.state.active) { ctx.go('#/session'); return; }
   const list = store.state.templates.filter((t) => t.items.length);
   if (!list.length) {
-    const t = store.newTemplate('My Workout');
-    store.saveTemplate(t).then(() => ctx.go(`#/builder/${t.id}`));
-    ctx.toast('Build your first workout — add a few exercises.');
+    import('./generate.js').then((m) => m.openGenerator(ctx));
     return;
   }
   ctx.sheet.open({
@@ -182,8 +180,10 @@ export function openStartPicker(ctx) {
         <div class="grow"><div class="item-title ellipsis">${esc(t.name)}</div>
         <div class="item-sub">${plural(t.items.length, 'exercise')} · ~${r.estimatedMinutes} min${t.lastPerformedAt ? ` · ${esc(relativeDay(t.lastPerformedAt).toLowerCase())}` : ''}</div></div>${icon.play.replace('<svg', '<svg style="width:22px;color:var(--accent)"')}</button>`;
     }).join('')}</div>
-    <button class="btn btn--ghost btn--block mt-12" data-action="new-from-picker">${icon.plus} New workout</button>`,
+    <div class="btn-row mt-12" style="display:flex;gap:8px"><button class="btn btn--ghost" style="flex:1" data-action="gen-from-picker">${icon.spark} Build one for me</button>
+      <button class="btn btn--ghost" style="flex:1" data-action="new-from-picker">${icon.plus} New workout</button></div>`,
     actions: {
+      'gen-from-picker': () => import('./generate.js').then((m) => m.openGenerator(ctx)),
       'new-from-picker': async () => {
         const t = store.newTemplate('New Workout');
         await store.saveTemplate(t);

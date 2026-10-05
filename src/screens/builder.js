@@ -9,6 +9,9 @@ import { esc, kg, repsRange, plural } from '../utils/format.js';
 import { relativeDay } from '../utils/date.js';
 import { filterExercises, exerciseRow, filterBar } from './exercises.js';
 import * as shared from './shared.js';
+import { blocks, groupLabels, normalizeGroups } from '../engine/session.js';
+import { openGenerator } from './generate.js';
+import { uid as newId } from '../utils/id.js';
 
 const DURATIONS = [30, 45, 60, 75, 90];
 
@@ -49,7 +52,7 @@ function recoveryNote(ctx, ex) {
   return '';
 }
 
-function itemCard(ctx, t, item, i) {
+function itemCard(ctx, t, item, i, labels = {}) {
   const ex = EXERCISE_BY_ID[item.exerciseId];
   if (!ex) return '';
   const u = ui(ctx);
@@ -60,7 +63,7 @@ function itemCard(ctx, t, item, i) {
   const stepR = ex.metric === 'time' ? 5 : 1;
   return `<div class="wx" data-uid="${item.uid}">
     <div class="wx-head">
-      <span class="wx-idx">${i + 1}</span>
+      <span class="wx-idx ${labels[i] ? 'wx-idx--ss' : ''}">${labels[i] || i + 1}</span>
       <button class="wx-main" data-action="b-toggle" data-uid="${item.uid}" aria-expanded="${open}">
         <div class="wx-name">${esc(ex.name)}</div>
         <div class="wx-target">${itemTarget(item, ex)} · ${esc(weightText(ctx, item, ex))}${ex.unilateral ? ' · per side' : ''}</div>
@@ -79,6 +82,8 @@ function itemCard(ctx, t, item, i) {
       </div>
       ${cfg && item.weight != null ? `<button class="link" style="justify-self:start;padding:0" data-action="b-w-auto">Use automatic weight</button>` : ''}
       <div class="wx-actions">
+        ${i < t.items.length - 1 && !(item.group && item.group === t.items[i + 1].group) ? `<button class="btn btn--sm" data-action="b-link">${icon.link} Superset with next</button>` : ''}
+        ${item.group ? `<button class="btn btn--sm" data-action="b-unlink">${icon.link} Unlink</button>` : ''}
         <button class="btn btn--sm" data-action="b-up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">${icon.up} Up</button>
         <button class="btn btn--sm" data-action="b-down" ${i === t.items.length - 1 ? 'disabled' : ''} aria-label="Move down">${icon.down} Down</button>
         <button class="btn btn--sm" data-action="open-exercise" data-id="${ex.id}">${icon.info} Info</button>
@@ -86,6 +91,16 @@ function itemCard(ctx, t, item, i) {
       </div>
     </div>` : ''}
   </div>`;
+}
+
+function exerciseList(ctx, t) {
+  const labels = groupLabels(t.items);
+  return blocks(t.items).map((b) => {
+    const cards = b.idx.map((i) => itemCard(ctx, t, t.items[i], i, labels)).join('');
+    if (b.idx.length < 2) return cards;
+    const kind = b.idx.length === 2 ? 'Superset' : 'Circuit';
+    return `<div class="ss-block"><div class="ss-head"><span>${kind} ${labels[b.idx[0]][0]}</span><span class="tiny muted">one set of each, then rest</span></div>${cards}</div>`;
+  }).join('');
 }
 
 const COV_CLASS = { 'On target': 'bar--good', Almost: '', Low: 'bar--warn', Missing: 'bar--warn', High: 'bar--warn', Support: 'bar--muted', 'Off-focus': 'bar--off' };
@@ -245,11 +260,12 @@ export default {
 
       ${t.items.length ? `<a class="card row mt-16" href="#analysis" data-action="b-jump" style="text-decoration:none;color:inherit;padding:12px 14px">
         <div class="rating-score" style="font-size:30px">${r.score}</div>
-        <div class="grow"><div class="rating-label ${r.grade}">${esc(r.label)}</div><div class="small text-2 ellipsis">${esc(r.headline)}</div></div>${icon.down}</a>` : ''}
+        <div class="grow" style="min-width:0"><div class="rating-label ${r.grade}">${esc(r.label)}</div><div class="small text-2 ellipsis">${esc(r.headline)}</div></div>${icon.down.replace('<svg', '<svg style="width:20px;height:20px;flex:none;color:var(--muted)"')}</a>` : ''}
 
       <section class="section"><div class="section-head"><p class="eyebrow">Exercises</p><span class="small muted">${plural(t.items.length, 'exercise')}</span></div>
-        ${t.items.length ? t.items.map((it, i) => itemCard(ctx, t, it, i)).join('') : `<div class="card empty"><h3>Add your first exercise</h3><p class="small">Everything shown works with your current equipment.</p></div>`}
-        <button class="btn btn--block mt-12" data-action="b-add-open" style="border-style:dashed">${icon.plus} Add exercise</button>
+        ${t.items.length ? exerciseList(ctx, t) : `<div class="card empty"><h3>Add your first exercise</h3><p class="small">Everything shown works with your current equipment — or let FORGE build the whole workout.</p></div>`}
+        <div class="btn-row mt-12" style="display:flex;gap:8px"><button class="btn" data-action="b-add-open" style="border-style:dashed;flex:1">${icon.plus} Add exercise</button>
+          <button class="btn ${t.items.length ? '' : 'btn--primary'}" data-action="b-gen" style="flex:1">${icon.spark} ${t.items.length ? 'Rebuild for me' : 'Build it for me'}</button></div>
       </section>
 
       <section class="section">${analysisCard(r)}</section>
@@ -282,16 +298,37 @@ export default {
       it.weight = stepWeight(cur, 1, cfg);
     }),
     'b-w-auto': (ctx, el) => mutateItem(ctx, el, (it) => { it.weight = null; }),
-    'b-up': (ctx, el) => mutateItem(ctx, el, (it, i, t) => { if (i > 0) [t.items[i - 1], t.items[i]] = [t.items[i], t.items[i - 1]]; }),
-    'b-down': (ctx, el) => mutateItem(ctx, el, (it, i, t) => { if (i < t.items.length - 1) [t.items[i + 1], t.items[i]] = [t.items[i], t.items[i + 1]]; }),
+    'b-up': (ctx, el) => mutateItem(ctx, el, (it, i, t) => { if (i > 0) [t.items[i - 1], t.items[i]] = [t.items[i], t.items[i - 1]]; normalizeGroups(t.items); }),
+    'b-down': (ctx, el) => mutateItem(ctx, el, (it, i, t) => { if (i < t.items.length - 1) [t.items[i + 1], t.items[i]] = [t.items[i], t.items[i + 1]]; normalizeGroups(t.items); }),
+    'b-link': (ctx, el) => mutateItem(ctx, el, (it, i, t) => {
+      const next = t.items[i + 1];
+      if (!next) return;
+      const gid = it.group || newId('g');
+      const old = next.group;
+      if (old && old !== gid) t.items.forEach((x) => { if (x.group === old) x.group = gid; });
+      it.group = gid;
+      next.group = gid;
+      normalizeGroups(t.items);
+      ctx.toast(blocks(t.items).find((b) => b.idx.includes(i)).idx.length > 2 ? 'Circuit — one set of each, then rest.' : 'Superset — one set of each, then rest.', { ms: 1800 });
+    }),
+    'b-unlink': (ctx, el) => mutateItem(ctx, el, (it, i, t) => {
+      const old = it.group;
+      delete it.group;
+      const fresh = newId('g');
+      for (let j = i + 1; j < t.items.length && t.items[j].group === old; j++) t.items[j].group = fresh;
+      normalizeGroups(t.items);
+    }),
+    'b-gen': (ctx) => openGenerator(ctx, { templateId: tpl(ctx).id }),
     'b-remove': (ctx, el) => {
       const t = tpl(ctx);
       const uid = el.closest('[data-uid]').dataset.uid;
       const idx = t.items.findIndex((i) => i.uid === uid);
+      const before = t.items.map((x) => ({ ...x }));
       const [removed] = t.items.splice(idx, 1);
+      normalizeGroups(t.items);
       save(ctx, t);
       ctx.toast(`Removed ${esc(EXERCISE_BY_ID[removed.exerciseId].name)}`, {
-        action: { label: 'Undo', run: () => { const tt = tpl(ctx); tt.items.splice(idx, 0, removed); save(ctx, tt); } },
+        action: { label: 'Undo', run: () => { const tt = tpl(ctx); tt.items = before; save(ctx, tt); } },
       });
     },
     'b-add-suggest': async (ctx) => {

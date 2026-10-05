@@ -2,9 +2,10 @@
 import { icon, stepper, SAFETY_TEXT, demo } from '../components/ui.js';
 import { EXERCISE_BY_ID } from '../data/exercises.js';
 import { MUSCLE_BY_ID } from '../data/muscles.js';
-import { itemState, nextIncomplete, totals, defaultDraft } from '../engine/session.js';
+import { itemState, nextIncomplete, totals, defaultDraft, afterSet, blockOf, groupLabels, warmupSets, warmupSuggestion } from '../engine/session.js';
+import { DELOAD } from '../engine/deload.js';
 import { previousPerformance } from '../engine/xp.js';
-import { stepWeight } from '../engine/equipment.js';
+import { stepWeight, snapWeight } from '../engine/equipment.js';
 import { restFor } from '../engine/rating.js';
 import { sideBalance } from '../engine/progression.js';
 import { esc, kg, clock, setLabel, repsRange, plural } from '../utils/format.js';
@@ -31,7 +32,10 @@ function draft(ctx) {
   const item = a.items[i];
   const prev = previousPerformance(ctx.store.progress, item.exerciseId, a.id);
   const rec = ctx.store.recommendationFor(item.exerciseId, item, a.id);
-  const nd = { ...defaultDraft({ session: a, itemIndex: i, previous: prev, recommendation: rec, cfg: ctx.store.cfgFor(item.exerciseId) }), key };
+  const cfg = ctx.store.cfgFor(item.exerciseId);
+  const nd = { ...defaultDraft({ session: a, itemIndex: i, previous: prev, recommendation: rec, cfg }), key };
+  // deload week: start ~10% lighter (once you've logged a set, your own choice carries over)
+  if (a.deload && cfg && !st.logged.length && item.weight == null) nd.weight = snapWeight(nd.weight * DELOAD.weightFactor, cfg);
   (a.drafts ||= {})[i] = nd;
   return nd;
 }
@@ -47,7 +51,7 @@ function setDraft(ctx, patch) {
 /** Keep set numbers contiguous after a delete (per side for unilateral work). */
 function renumber(a, itemIndex) {
   for (const side of [null, 'L', 'R']) {
-    a.sets.filter((x) => x.itemIndex === itemIndex && (x.side || null) === side)
+    a.sets.filter((x) => x.itemIndex === itemIndex && !x.warmup && (x.side || null) === side)
       .sort((x, y) => x.ts - y.ts)
       .forEach((x, k) => { x.setIndex = k; });
   }
@@ -94,6 +98,11 @@ function render(ctx) {
   const prevSet = prev?.sets.find((p) => p.setIndex === st.setIndex && (p.side || null) === (st.side || null)) || prev?.bestSet;
   const live = ctx.store.liveProgress.sessions[a.id];
   const allDone = nextIncomplete(a, i) === -1;
+  const labels = groupLabels(a.items);
+  const blk = blockOf(a.items, i);
+  const inBlock = blk && blk.idx.length > 1;
+  const nextInBlock = inBlock ? blk.idx[(blk.idx.indexOf(i) + 1) % blk.idx.length] : null;
+  const warmups = warmupSets(a, i);
   const segs = a.items.map((it, k) => {
     const s = itemState(a, k);
     return Array.from({ length: it.sets }, (_, j) => `<i class="${j < s.done ? 'done' : k === i && j === s.done ? 'cur' : ''}"></i>`).join('');
@@ -119,11 +128,15 @@ function render(ctx) {
         ${cfg ? `<div><div class="log-label">Weight</div>${stepper({ value: kg(d.weight), unit: 'kg', dec: 's-w-dec', inc: 's-w-inc', label: 'weight', decDisabled: d.weight <= cfg.min, incDisabled: d.weight >= cfg.max })}</div>` : ''}
         ${amount}
         <button class="btn btn--primary btn--block btn-log" data-action="s-log">Log set${st.side ? ` · ${st.side === 'L' ? 'Left' : 'Right'}` : ''}</button>
+        ${(() => {
+          const wu = !st.logged.length && cfg ? warmupSuggestion(d.weight, cfg) : null;
+          return wu ? `<button class="btn btn--ghost btn--block btn--sm" data-action="s-warmup" data-w="${wu.weight}" data-r="${wu.reps}">${icon.feather} Log a warm-up set · ${kg(wu.weight)} kg × ${wu.reps} <span class="muted">(no XP)</span></button>` : '';
+        })()}
       </div>`;
   }
 
-  const logged = st.logged.length ? `<div class="logged">${st.logged.map((s) => `<div class="logged-row"><span class="tag">${s.setIndex + 1}${s.side ? s.side : ''}</span><span>${esc(setLabel(s, ex))}</span>
-      <span class="x num">+${Math.round(live?.setXp[s.id] || 0)} XP</span>
+  const logged = st.logged.length || warmups.length ? `<div class="logged">${[...warmups, ...st.logged].map((s) => `<div class="logged-row ${s.warmup ? 'logged-row--wu' : ''}"><span class="tag">${s.warmup ? 'W' : `${s.setIndex + 1}${s.side ? s.side : ''}`}</span><span>${esc(setLabel(s, ex))}</span>
+      <span class="x num">${s.warmup ? 'warm-up' : `+${Math.round(live?.setXp[s.id] || 0)} XP`}</span>
       <button class="icon-btn" style="width:36px;height:36px" data-action="s-del-set" data-id="${s.id}" aria-label="Delete this set">${icon.close}</button></div>`).join('')}</div>` : '';
   const bal = sideBalance(ex, st.logged);
   const balance = bal && bal.level !== 'even' ? `<p class="balance-note ${bal.level}">${esc(bal.text)}</p>` : '';
@@ -135,6 +148,8 @@ function render(ctx) {
       <button class="icon-btn" data-action="s-list" aria-label="All exercises">${icon.list}</button>
     </div>
     <div class="sess-progress" aria-label="${t.done} of ${t.planned} sets done">${segs}</div>
+    ${a.deload ? `<div class="deload-pill">${icon.feather} Deload week — lighter on purpose: fewer sets, ~10% less weight</div>` : ''}
+    ${inBlock ? `<div class="ss-pill"><b>${blk.idx.length === 2 ? 'Superset' : 'Circuit'} ${esc(labels[i])}</b><span>then ${esc(EXERCISE_BY_ID[a.items[nextInBlock].exerciseId].name)}${blk.idx.indexOf(i) === blk.idx.length - 1 ? ' after rest' : ' — no rest'}</span></div>` : ''}
     <div class="row row--between"><span class="ex-muscle">${esc(ex.primary.map((m) => MUSCLE_BY_ID[m].short).join(' · '))}</span>
       <span class="small muted">Exercise ${i + 1} / ${a.items.length}</span></div>
     <div class="row" style="align-items:center;gap:12px"><h1 class="ex-title grow">${esc(ex.name)}</h1>
@@ -240,13 +255,18 @@ async function logSet(ctx) {
     await store.updateActive(() => {});
     return;
   }
-  const after = itemState(a, i);
-  const restSec = restFor(ex, store.settings);
+  const nav = afterSet(a, i);
+  const blk = blockOf(a.items, i);
+  // supersets rest once per round, as long as the longest rest in the block
+  const restSec = blk && blk.idx.length > 1 ? Math.max(...blk.idx.map((k) => restFor(EXERCISE_BY_ID[a.items[k].exerciseId], store.settings))) : restFor(ex, store.settings);
+  if (nav.transition) {
+    const nx = EXERCISE_BY_ID[a.items[nav.next].exerciseId];
+    await store.updateActive((s) => { s.current = nav.next; s.rest = null; });
+    ctx.toast(`✓ ${esc(label)} · +${Math.round(xp)} XP — now ${esc(nx.name)}`, { kind: 'good', ms: 1800 });
+    return;
+  }
   await store.updateActive((s) => {
-    if (after.complete) {
-      const n = nextIncomplete(s, i);
-      if (n !== -1) s.current = n;
-    }
+    if (nav.next !== -1) s.current = nav.next;
     const finished = nextIncomplete(s, s.current) === -1;
     s.rest = finished ? null : { endsAt: Date.now() + restSec * 1000, total: restSec, label, xp };
   });
@@ -260,11 +280,12 @@ function exerciseListSheet(ctx) {
     render: () => {
       const a = A(ctx);
       if (!a) return '';
+      const labels = groupLabels(a.items);
       return `<div class="list">${a.items.map((it, k) => {
         const ex = EXERCISE_BY_ID[it.exerciseId];
         const s = itemState(a, k);
         return `<button class="item" data-action="s-jump" data-i="${k}" ${k === a.current ? 'style="border-color:var(--accent)"' : ''}>
-          <span class="wx-idx">${s.complete ? '✓' : k + 1}</span><div class="grow"><div class="item-title ellipsis">${esc(ex.name)}</div>
+          <span class="wx-idx ${labels[k] ? 'wx-idx--ss' : ''}">${s.complete ? '✓' : labels[k] || k + 1}</span><div class="grow"><div class="item-title ellipsis">${esc(ex.name)}</div>
           <div class="item-sub">${s.done} / ${it.sets} sets · ${repsRange(it.repMin, it.repMax, ex.metric)}</div></div></button>`;
       }).join('')}</div>
       <button class="btn btn--block mt-12" data-action="s-add-ex" style="border-style:dashed">${icon.plus} Add exercise</button>`;
@@ -336,6 +357,14 @@ export default {
   },
   actions: {
     's-log': (ctx) => logSet(ctx),
+    's-warmup': async (ctx, el) => {
+      const a = A(ctx);
+      const item = a.items[a.current];
+      await ctx.store.updateActive((s) => {
+        s.sets.push({ id: uid('x'), exerciseId: item.exerciseId, itemIndex: s.current, setIndex: -1, side: null, warmup: true, weight: Number(el.dataset.w), reps: Number(el.dataset.r), ts: Date.now() });
+      });
+      ctx.toast('Warm-up logged — now your working sets.', { ms: 1600 });
+    },
     's-w-dec': (ctx) => { const d = draft(ctx); setDraft(ctx, { weight: stepWeight(d.weight, -1, ctx.store.cfgFor(A(ctx).items[A(ctx).current].exerciseId)) }); },
     's-w-inc': (ctx) => { const d = draft(ctx); setDraft(ctx, { weight: stepWeight(d.weight, 1, ctx.store.cfgFor(A(ctx).items[A(ctx).current].exerciseId)) }); },
     's-amt-dec': (ctx) => {
