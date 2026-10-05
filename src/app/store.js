@@ -10,6 +10,7 @@ import { computeStreak } from '../engine/streak.js';
 import { activeProfile, capabilities, loadConfig } from '../engine/equipment.js';
 import { recommend } from '../engine/progression.js';
 import { rateWorkout } from '../engine/rating.js';
+import { ratePlan } from '../engine/plan.js';
 import { EXERCISE_BY_ID } from '../data/exercises.js';
 import { uid } from '../utils/id.js';
 
@@ -55,8 +56,16 @@ export class Store {
     const ex = EXERCISE_BY_ID[exerciseId];
     return ex ? loadConfig(this.profile, ex.load) : null;
   }
-  rate(items, targetMinutes) {
-    return rateWorkout(items, { settings: this.settings, profile: this.profile, caps: this.caps, progress: this.progress, targetMinutes });
+  rate(items, targetMinutes, focus = 'auto', customMuscles = []) {
+    return rateWorkout(items, { settings: this.settings, profile: this.profile, caps: this.caps, progress: this.progress, targetMinutes, focus, customMuscles });
+  }
+  rateTemplate(t) {
+    return this.rate(t.items, t.targetMinutes, t.focus || 'auto', t.customMuscles || []);
+  }
+  /** Workouts in the weekly plan (all saved workouts unless excluded). */
+  get planTemplates() { return this.state.templates.filter((t) => t.inPlan !== false && t.items.length); }
+  get plan() {
+    return this.memoize('plan', () => ratePlan(this.planTemplates, { settings: this.settings, rateTemplate: (t) => this.rateTemplate(t) }));
   }
   /** "NEXT TIME" recommendation based on the latest session containing the exercise. */
   recommendationFor(exerciseId, target, excludeSessionId) {
@@ -83,7 +92,7 @@ export class Store {
 
   newTemplate(name = 'New Workout', items = []) {
     return {
-      id: uid('t'), name, items, targetMinutes: this.settings.targetMinutes || 45,
+      id: uid('t'), name, items, targetMinutes: this.settings.targetMinutes || 45, focus: 'auto', customMuscles: [], inPlan: true,
       createdAt: Date.now(), updatedAt: Date.now(), order: this.state.templates.length,
     };
   }
@@ -113,7 +122,7 @@ export class Store {
       id: uid('s'), templateId: template.id || null, name: template.name || 'Workout',
       startedAt: Date.now(), status: 'active', items, sets: [], current: 0, drafts: {}, rest: null,
       targetMinutes: template.targetMinutes,
-      ratingAtStart: (() => { const r = this.rate(items, template.targetMinutes); return { score: r.score, grade: r.grade, label: r.label, coverage: r.coverage }; })(),
+      ratingAtStart: (() => { const r = this.rateTemplate({ ...template, items }); return { score: r.score, grade: r.grade, label: r.label, split: r.split?.name }; })(),
     };
     this.state.active = session;
     await this.repo.saveActive(session);
