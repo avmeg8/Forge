@@ -1,5 +1,5 @@
 /** Exercise detail — how-to, personal best, recent performance, progression graph, related movements. */
-import { appbar, icon, SAFETY_TEXT } from '../components/ui.js';
+import { appbar, icon, SAFETY_TEXT, demo } from '../components/ui.js';
 import { lineChart } from '../components/charts.js';
 import { EXERCISES, EXERCISE_BY_ID, relatedExercises, RELATION_LABEL } from '../data/exercises.js';
 import { MUSCLE_BY_ID } from '../data/muscles.js';
@@ -9,9 +9,10 @@ import { esc, kg, setLabel, repsRange } from '../utils/format.js';
 import { relativeDay, shortDate } from '../utils/date.js';
 import { DIFFICULTY } from './exercises.js';
 
-export function exerciseInfoHtml(ex) {
+export function exerciseInfoHtml(ex, { withDemo = true } = {}) {
   return `
-    <div class="row" style="flex-wrap:wrap;gap:6px">
+    ${withDemo ? demo(ex, { cls: 'demo--lg' }) : ''}
+    <div class="row mt-12" style="flex-wrap:wrap;gap:6px">
       ${ex.primary.map((m) => `<span class="tag tag--accent">${esc(MUSCLE_BY_ID[m].name)}</span>`).join('')}
       ${ex.secondary.map((m) => `<span class="tag">${esc(MUSCLE_BY_ID[m].name)}</span>`).join('')}
     </div>
@@ -84,10 +85,11 @@ export default {
     }).join('')}</div></section>` : '';
 
     return `${appbar({ title: ex.name, back: true })}
+      ${demo(ex, { cls: 'demo--lg' })}
       ${lockHtml}
       ${perf}
       ${familyHtml}
-      <section class="section"><div class="card">${exerciseInfoHtml(ex)}</div></section>
+      <section class="section"><div class="card">${exerciseInfoHtml(ex, { withDemo: false })}</div></section>
       ${relHtml}`;
   },
 };

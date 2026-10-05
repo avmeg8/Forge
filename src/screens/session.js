@@ -1,5 +1,5 @@
 /** Focused workout mode — log sets in one tap, rest timer, left/right tracking. */
-import { icon, stepper, SAFETY_TEXT } from '../components/ui.js';
+import { icon, stepper, SAFETY_TEXT, demo } from '../components/ui.js';
 import { EXERCISE_BY_ID } from '../data/exercises.js';
 import { MUSCLE_BY_ID } from '../data/muscles.js';
 import { itemState, nextIncomplete, totals, defaultDraft } from '../engine/session.js';
@@ -137,8 +137,8 @@ function render(ctx) {
     <div class="sess-progress" aria-label="${t.done} of ${t.planned} sets done">${segs}</div>
     <div class="row row--between"><span class="ex-muscle">${esc(ex.primary.map((m) => MUSCLE_BY_ID[m].short).join(' · '))}</span>
       <span class="small muted">Exercise ${i + 1} / ${a.items.length}</span></div>
-    <div class="row" style="align-items:flex-start"><h1 class="ex-title grow">${esc(ex.name)}</h1>
-      <button class="icon-btn" data-action="s-info" aria-label="How to do ${esc(ex.name)}">${icon.info}</button></div>
+    <div class="row" style="align-items:center;gap:12px"><h1 class="ex-title grow">${esc(ex.name)}</h1>
+      ${demo(ex, { cls: 'demo--thumb', open: true, caption: false })}</div>
     <div class="row row--between mt-8">
       <div style="font-size:20px;font-weight:800" class="num">SET ${Math.min(st.setIndex + 1, item.sets)} <span class="muted" style="font-weight:600">/ ${item.sets}</span></div>
       ${ex.unilateral ? `<div class="side-pill" aria-label="Side"><span class="${st.side === 'L' && !st.complete ? 'on' : ''}">LEFT</span><span class="${st.side === 'R' && !st.complete ? 'on' : ''}">RIGHT</span></div>` : ''}
