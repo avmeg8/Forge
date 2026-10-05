@@ -9,7 +9,7 @@
  *   alongside the old one and the app offers a "Reload" toast to switch.
  */
 // <precache>
-const VERSION = '38366bf46a';
+const VERSION = '3d21a75066';
 const APP_SHELL = [
   "./",
   "index.html",
@@ -29,9 +29,11 @@ const APP_SHELL = [
   "src/data/equipment.js",
   "src/data/exercises.js",
   "src/data/muscles.js",
+  "src/data/splits.js",
   "src/engine/equipment.js",
   "src/engine/insights.js",
   "src/engine/levels.js",
+  "src/engine/plan.js",
   "src/engine/progression.js",
   "src/engine/rating.js",
   "src/engine/recovery.js",
@@ -44,6 +46,7 @@ const APP_SHELL = [
   "src/screens/exercises.js",
   "src/screens/home.js",
   "src/screens/onboarding.js",
+  "src/screens/plan.js",
   "src/screens/progress.js",
   "src/screens/session.js",
   "src/screens/settings.js",
