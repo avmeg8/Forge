@@ -272,7 +272,7 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 .week-dots i.on { background: var(--accent); }
 
 /* ───────────────────────── lists ───────────────────────── */
-.list { display: grid; gap: 8px; }
+.list { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
 .item {
   display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 60px;
   background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--r); width: 100%; text-align: left; color: inherit;
@@ -451,3 +451,22 @@ button.mlevel:active { background: var(--surface-2); }
 .demo.is-paused .demo-play { opacity: 1; }
 .demo.is-paused .demo-svg { opacity: .55; }
 @media (max-width: 340px) { .demo--thumb { width: 80px; } }
+
+/* ───────────────────────── workout focus ───────────────────────── */
+.focus-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 46px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); text-align: left; }
+.focus-btn b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.focus-btn svg { width: 18px; color: var(--muted); flex: none; }
+.focus-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.bar--warn > i { background: var(--warn); }
+.bar--muted > i { background: #6b7684; }
+.bar--off > i { background: var(--bad); opacity: .75; }
+.cov .lbl { white-space: nowrap; }
+.lbl-ontarget { color: var(--good) !important; }
+.lbl-offfocus, .lbl-missing { color: var(--bad) !important; }
+.lbl-low, .lbl-high { color: var(--warn) !important; }
+.cov { grid-template-columns: 84px minmax(0, 1fr) 104px; }
+.plan-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) 96px; gap: 10px; align-items: center; font-size: 13px; padding: 4px 0; }
+.plan-bar { position: relative; height: 8px; border-radius: 8px; background: var(--surface-3); }
+.plan-bar .band { position: absolute; top: -3px; bottom: -3px; border-left: 1px dashed var(--faint); border-right: 1px dashed var(--faint); }
+.plan-bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 8px; background: var(--accent); }
+@media (max-width: 340px) { .cov, .plan-row { grid-template-columns: 70px minmax(0, 1fr) 90px; } }
