@@ -1,47 +1,43 @@
 /**
- * Workout analysis & rating (0–100).
+ * Workout analysis & rating (0–100) — judged against the workout's FOCUS.
  *
- * The rating judges STRUCTURE, not size. Components and weights:
+ * A workout has a focus (split): Push, Pull, Legs, Chest, Back & Biceps, Custom… or Auto,
+ * where FORGE detects it from the exercises. The rating asks "is this a good <focus> workout?"
+ * — a great chest day is never penalised for not training legs.
  *
- *   Coverage     30  Does the workout train the muscles its type implies, in a productive
- *                    per-session range (≈3–8 effective sets per muscle for beginners, up to 5–12 for advanced)?
- *   Balance      12  Opposing muscles (chest/back, quads/posterior chain, biceps/triceps,
- *                    front/rear delts) — judged on this workout PLUS the last 7 days, so a
- *                    push day following a pull day is not penalised.
- *   Volume       14  Total sets appropriate for the target duration — too little or too much loses points.
- *   Variety       8  Distinct movement patterns.
- *   Redundancy    8  Several exercises doing the same job.
- *   Recovery      8  Targeted muscles trained hard in the last 24–48 h.
- *   Progression   8  Can these exercises be progressively overloaded with YOUR equipment?
- *                    Sensible rep ranges? Difficulty appropriate to experience?
- *   Duration     12  Estimated time vs. the workout's target duration.
+ *   Coverage     30  Every TARGET muscle of the focus gets a productive dose. The per-muscle
+ *                    dose depends on the focus type (single-muscle days expect more sets per
+ *                    muscle than a full-body day) and on experience.
+ *   Focus fit    10  How much of the work lands on the focus (target + support muscles).
+ *   Balance      12  Proportions *inside* the focus (chest vs triceps on a chest & triceps day,
+ *                    quads vs posterior chain on legs, front vs side/rear delts on shoulders…).
+ *   Volume       12  Total sets appropriate for the target duration.
+ *   Variety       7  Distinct movement patterns (focus days may repeat a pattern once).
+ *   Redundancy    7  Too many exercises doing exactly the same job.
+ *   Recovery      8  Target muscles trained hard in the last 24–48 h.
+ *   Progression   6  Can these exercises be overloaded with YOUR equipment? Sensible rep ranges?
+ *   Duration      8  Estimated time vs. the workout's target duration.
  *
  * Effective sets: primary muscle = 1 set, secondary = 0.5 set.
- * Equipment-aware: suggestions only come from exercises you can do, and nothing is
- * penalised for equipment you don't own.
+ * Equipment-aware: suggestions only come from exercises you can do, stay on focus,
+ * and nothing is penalised for equipment you don't own.
  */
 import { EXERCISE_BY_ID, EXERCISES } from '../data/exercises.js';
-import { MUSCLE_BY_ID, SIZE_WEIGHT, OPPOSING_PAIRS, COVERAGE_GROUPS } from '../data/muscles.js';
+import { MUSCLE_BY_ID, SIZE_WEIGHT } from '../data/muscles.js';
+import { SPLIT_BY_ID, resolveSplit, sessionDose } from '../data/splits.js';
 import { isAvailable, loadConfig } from './equipment.js';
 import { recoveryStatus } from './recovery.js';
 
 export const RATING_WEIGHTS = {
-  coverage: 30, balance: 12, volume: 14, variety: 8, redundancy: 8, recovery: 8, progression: 8, duration: 12,
-};
-
-const IDEAL = { beginner: [3, 8], intermediate: [3, 10], advanced: [4, 12] };
-
-export const TYPE_INFO = {
-  upper: { name: 'Upper body', expect: ['chest', 'lats', 'traps', 'front_delts', 'side_delts', 'rear_delts', 'biceps', 'triceps'], pairs: ['push_pull', 'delts', 'arms'] },
-  push: { name: 'Push', expect: ['chest', 'front_delts', 'side_delts', 'triceps'], pairs: ['push_pull', 'delts'], split: true },
-  pull: { name: 'Pull', expect: ['lats', 'traps', 'rear_delts', 'biceps'], pairs: ['push_pull', 'delts'], split: true },
-  lower: { name: 'Lower body', expect: ['quads', 'glutes', 'hamstrings', 'calves'], pairs: ['legs'] },
-  full: { name: 'Full body', expect: ['chest', 'lats', 'quads', 'glutes', 'hamstrings', 'side_delts', 'abs'], pairs: ['push_pull', 'legs', 'arms'] },
-  arms: { name: 'Arms', expect: ['biceps', 'triceps', 'forearms'], pairs: ['arms'], split: true },
-  core: { name: 'Core', expect: ['abs', 'obliques', 'lower_back'], pairs: ['trunk'], split: true },
+  coverage: 30, focus: 10, balance: 12, volume: 12, variety: 7, redundancy: 7, recovery: 8, progression: 6, duration: 8,
 };
 
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const listJoin = (arr) => (arr.length <= 1 ? arr.join('') : `${arr.slice(0, -1).join(', ')} and ${arr[arr.length - 1]}`);
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const short = (m) => MUSCLE_BY_ID[m].short;
+const lower = (m) => MUSCLE_BY_ID[m].short.toLowerCase();
+const an = (w) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
 
 /** Effective sets per muscle for a list of workout items. */
 export function muscleVolume(items) {
@@ -55,52 +51,48 @@ export function muscleVolume(items) {
   return eff;
 }
 
-function groupOf(m) {
-  const g = MUSCLE_BY_ID[m].group;
-  return m === 'lower_back' ? 'core' : g;
-}
-
-export function classify(items) {
-  const share = { chest: 0, back: 0, shoulders: 0, arms: 0, legs: 0, core: 0 };
-  const mshare = {};
+/** Share of PRIMARY work landing on each muscle. */
+function primaryShare(items) {
+  const share = {};
   let total = 0;
   for (const it of items) {
     const ex = EXERCISE_BY_ID[it.exerciseId];
     if (!ex) continue;
     const per = it.sets / ex.primary.length;
-    for (const m of ex.primary) {
-      share[groupOf(m)] += per;
-      mshare[m] = (mshare[m] || 0) + per;
-      total += per;
-    }
+    for (const m of ex.primary) { share[m] = (share[m] || 0) + per; total += per; }
   }
+  return { share, total };
+}
+
+/**
+ * Auto-detect the most specific split that explains the workout.
+ * Candidates are scored by how much primary work lands on their target+support muscles,
+ * minus a penalty for target muscles that get nothing; specific splits win ties.
+ */
+export function detectSplit(items) {
+  const { share, total } = primaryShare(items);
   if (!total) return 'full';
-  const s = (g) => share[g] / total;
-  const ms = (list) => list.reduce((a, m) => a + (mshare[m] || 0), 0) / total;
-  if (s('legs') >= 0.7) return 'lower';
-  if (s('core') >= 0.7) return 'core';
-  if (s('arms') >= 0.7) return 'arms';
-  if (s('chest') + s('back') + s('shoulders') + s('arms') >= 0.75) {
-    if (ms(['chest', 'front_delts', 'side_delts', 'triceps']) >= 0.75) return 'push';
-    if (ms(['lats', 'traps', 'rear_delts', 'biceps', 'forearms']) >= 0.75) return 'pull';
-    return 'upper';
-  }
-  return 'full';
+  const s = (list) => list.reduce((a, m) => a + (share[m] || 0), 0) / total;
+  const order = ['chest', 'back', 'shoulders', 'arms', 'glutes', 'core', 'chest_triceps', 'back_biceps', 'chest_back', 'shoulders_arms', 'push', 'pull', 'legs', 'upper', 'lower', 'full'];
+  let best = 'full', bestScore = -Infinity;
+  order.forEach((id, rank) => {
+    const sp = SPLIT_BY_ID[id];
+    const onTarget = s(sp.target);
+    const on = s([...sp.target, ...sp.support]);
+    const missing = sp.target.filter((m) => !(share[m] > 0)).length / sp.target.length;
+    // must explain the workout well; specific splits (low rank) get a small edge
+    if (on < 0.8 || onTarget < 0.6) return;
+    const score = on + 0.25 * onTarget - 0.6 * missing - rank * 0.012;
+    if (score > bestScore) { bestScore = score; best = id; }
+  });
+  return best;
 }
 
 export function coverageScore(eff, lo, hi) {
   if (eff <= 0) return 0;
   if (eff < lo) return 0.9 * (eff / lo) ** 1.2;
   if (eff <= hi) return 1;
-  return Math.max(0.4, 1 - 0.08 * (eff - hi));
-}
-
-export function coverageLabel(eff) {
-  if (eff >= 5) return 'Excellent';
-  if (eff >= 3) return 'Good';
-  if (eff >= 1.5) return 'Moderate';
-  if (eff > 0) return 'Light';
-  return 'Not trained';
+  return Math.max(0.4, 1 - 0.07 * (eff - hi));
 }
 
 export function restFor(ex, settings) {
@@ -120,17 +112,13 @@ export function estimateMinutes(items, settings) {
   return Math.round(sec / 60);
 }
 
-const listJoin = (arr) => (arr.length <= 1 ? arr.join('') : `${arr.slice(0, -1).join(', ')} and ${arr[arr.length - 1]}`);
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-
 /**
- * @param items     [{ exerciseId, sets, repMin, repMax, weight }]
- * @param ctx       { settings, profile, caps, progress, now, targetMinutes }
+ * @param items  [{ exerciseId, sets, repMin, repMax, weight }]
+ * @param ctx    { settings, profile, caps, progress, now, targetMinutes, focus, customMuscles }
  */
 export function rateWorkout(items, ctx = {}) {
   const settings = ctx.settings || {};
   const experience = settings.experience || 'beginner';
-  const [lo, hi] = IDEAL[experience] || IDEAL.beginner;
   const progress = ctx.progress;
   const now = ctx.now || Date.now();
   const targetMinutes = ctx.targetMinutes || settings.targetMinutes || 45;
@@ -138,51 +126,54 @@ export function rateWorkout(items, ctx = {}) {
   const totalSets = valid.reduce((a, it) => a + it.sets, 0);
   const estimatedMinutes = valid.length ? estimateMinutes(valid, settings) : 0;
 
+  const focusSetting = ctx.focus || 'auto';
+  const auto = focusSetting === 'auto';
+  const split = auto ? SPLIT_BY_ID[detectSplit(valid)] : resolveSplit(focusSetting, ctx.customMuscles) || SPLIT_BY_ID.full;
+  const splitInfo = { id: split.id, name: split.name, auto, target: split.target, support: split.support };
+
   if (!valid.length) {
     return {
-      score: 0, grade: 'empty', label: 'Add exercises', type: null, typeName: '',
-      headline: 'Add a few exercises and FORGE will analyse your workout.',
+      score: 0, grade: 'empty', label: 'Add exercises', split: splitInfo, typeName: split.name,
+      headline: auto ? 'Add a few exercises and FORGE will analyse your workout.' : `Add exercises for your ${split.name.toLowerCase()} workout.`,
       positives: [], improvements: [], warnings: [], coverage: [], components: {},
-      suggestion: null, estimatedMinutes: 0, totalSets: 0, muscleEff: {},
+      suggestion: null, estimatedMinutes: 0, totalSets: 0, muscleEff: {}, targetMinutes, dose: sessionDose(split.dose, experience),
     };
   }
 
   const eff = muscleVolume(valid);
-  const type = classify(valid);
-  const info = TYPE_INFO[type];
+  const [lo, hi] = sessionDose(split.dose, experience);
+  const target = split.target;
+  const onFocusSet = new Set([...target, ...split.support]);
   const C = {};
 
-  // ── Coverage ──
+  // ── Coverage of target muscles ──
   let cw = 0, cs = 0;
-  const expectScores = {};
-  for (const m of info.expect) {
+  const tScore = {};
+  for (const m of target) {
     const w = SIZE_WEIGHT[MUSCLE_BY_ID[m].size];
-    const sc = coverageScore(eff[m] || 0, lo, hi);
-    expectScores[m] = sc;
-    cw += w; cs += w * sc;
+    tScore[m] = coverageScore(eff[m] || 0, lo, hi);
+    cw += w; cs += w * tScore[m];
   }
-  const missingCount = info.expect.filter((m) => expectScores[m] < 0.35).length;
-  // squared so gaps matter; each completely-missed expected muscle costs extra
-  C.coverage = clamp01((cs / cw) ** 2 - 0.12 * missingCount);
+  const missing = target.filter((m) => tScore[m] < 0.3);
+  C.coverage = clamp01((cs / cw) ** 1.5 - 0.1 * missing.length);
 
-  // ── Balance (this workout + last 7 days) ──
-  const week = (m) => progress?.muscles?.[m]?.weekSets || 0;
+  // ── Focus fit ──
+  const totalEff = Object.values(eff).reduce((a, b) => a + b, 0) || 1;
+  const onEff = Object.entries(eff).filter(([m]) => onFocusSet.has(m)).reduce((a, [, v]) => a + v, 0);
+  const offShare = 1 - onEff / totalEff;
+  C.focus = offShare <= 0.15 ? 1 : clamp01(1 - (offShare - 0.15) / 0.4);
+  const offExercises = valid.map((it) => EXERCISE_BY_ID[it.exerciseId]).filter((ex) => ex.primary.every((m) => !onFocusSet.has(m)));
+
+  // ── Balance inside the focus ──
   const pairNotes = [];
   let bSum = 0, bN = 0;
-  for (const pid of info.pairs) {
-    const p = OPPOSING_PAIRS.find((x) => x.id === pid);
-    const avg = (list, f) => list.reduce((a, m) => a + f(m), 0) / list.length;
-    const wa = avg(p.a, (m) => eff[m] || 0);
-    const wb = avg(p.b, (m) => eff[m] || 0);
-    if (wa < 2 && wb < 2) continue;
-    const A = wa + avg(p.a, week);
-    const B = wb + avg(p.b, week);
-    let sc;
-    const weekA = avg(p.a, week), weekB = avg(p.b, week);
-    if (info.split && (wa < 2 || wb < 2) && (wa < 2 ? weekA : weekB) === 0) sc = 0.8; // split day, other side not trained this week yet
-    else sc = clamp01(Math.min(A, B) / Math.max(A, B) / 0.6);
+  for (const [a, b, minRatio] of split.balance || []) {
+    const A = a.reduce((s, m) => s + (eff[m] || 0), 0);
+    const B = b.reduce((s, m) => s + (eff[m] || 0), 0);
+    if (A < 1 && B < 1) continue;
+    const sc = clamp01(Math.min(A, B) / Math.max(A, B) / minRatio);
     bSum += sc; bN++;
-    pairNotes.push({ pair: p, score: sc, A, B, inWorkout: Math.min(wa, wb) >= 1 });
+    pairNotes.push({ a, b, A, B, score: sc });
   }
   C.balance = bN ? bSum / bN : 1;
 
@@ -190,37 +181,36 @@ export function rateWorkout(items, ctx = {}) {
   const idealSets = targetMinutes / 2.6;
   const r = totalSets / idealSets;
   let vol = r < 0.55 ? Math.max(0.3, 1 - (0.55 - r) * 2.2) : r <= 1.3 ? 1 : Math.max(0, 1 - (r - 1.3) * 1.2);
-  const excessive = Object.entries(eff).filter(([, e]) => e > 12).map(([m]) => m);
-  vol = clamp01(vol - 0.15 * excessive.length);
+  const excessive = Object.entries(eff).filter(([, e]) => e > hi + 5).map(([m]) => m);
+  vol = clamp01(vol - 0.12 * excessive.length);
   C.volume = vol;
 
   // ── Variety & redundancy ──
   const patterns = valid.map((it) => EXERCISE_BY_ID[it.exerciseId].pattern);
   const distinct = new Set(patterns).size;
-  C.variety = valid.length === 1 ? 0.5 : clamp01((distinct / valid.length - 0.3) / 0.5);
+  const focused = split.dose === 'focus';
+  C.variety = valid.length === 1 ? 0.5 : clamp01((distinct / valid.length - (focused ? 0.2 : 0.3)) / 0.45);
   const groups = {};
   for (const it of valid) {
     const ex = EXERCISE_BY_ID[it.exerciseId];
     (groups[`${ex.pattern}:${ex.primary[0]}`] ||= []).push(ex);
   }
+  const allowed = focused ? 2 : 1;
   let redPen = 0;
   const redundant = [];
   for (const g of Object.values(groups)) {
-    if (g.length === 2) redPen += 0.1;
-    else if (g.length === 3) redPen += 0.35;
-    else if (g.length >= 4) redPen += 0.6 + 0.1 * (g.length - 4);
-    if (g.length >= 2) redundant.push(g);
+    if (g.length > allowed) { redPen += 0.25 * (g.length - allowed); redundant.push(g); }
   }
   const dupIds = valid.length - new Set(valid.map((it) => it.exerciseId)).size;
   redPen += dupIds * 0.3;
   C.redundancy = clamp01(1 - redPen);
 
-  // ── Recovery ──
+  // ── Recovery (target muscles only) ──
   const warnings = [];
   let rW = 0, rS = 0;
-  for (const [m, e] of Object.entries(eff)) {
-    const primary = valid.some((it) => EXERCISE_BY_ID[it.exerciseId].primary.includes(m));
-    if (!primary) continue;
+  for (const m of target) {
+    const e = eff[m] || 0;
+    if (!e) continue;
     const st = recoveryStatus(progress?.muscles?.[m], now);
     const strain = st.level === 'limited' ? 1 : st.level === 'partial' ? 0.5 : 0;
     rW += e; rS += e * strain;
@@ -259,47 +249,50 @@ export function rateWorkout(items, ctx = {}) {
   for (const [k, w] of Object.entries(RATING_WEIGHTS)) score += w * C[k];
   score = Math.round(score);
   if (totalSets < 4) score = Math.min(score, 45);
+  // a workout that's mostly something else can't score well as this focus
+  if (offShare > 0.15) score = Math.min(score, Math.round(100 - 90 * (offShare - 0.15)));
   score = Math.max(0, Math.min(100, score));
 
-  // ── Coverage display ──
-  const coverage = [];
-  for (const g of COVERAGE_GROUPS) {
-    const vals = g.muscles.map((m) => eff[m] || 0).sort((a, b) => b - a);
-    const agg = vals[0] + vals.slice(1).reduce((a, v) => a + v * 0.5, 0);
-    const expected = g.muscles.some((m) => info.expect.includes(m));
-    if (agg <= 0 && !expected) continue;
-    coverage.push({ id: g.id, name: g.name, eff: Math.round(agg * 10) / 10, pct: clamp01(agg / 6), label: coverageLabel(agg), expected });
-  }
-  coverage.sort((a, b) => b.eff - a.eff);
+  // ── Coverage display: target muscles first, then support / off-focus work ──
+  const statusOf = (e) => (e <= 0 ? 'Missing' : e < lo * 0.6 ? 'Low' : e < lo ? 'Almost' : e <= hi ? 'On target' : 'High');
+  const coverage = [
+    ...target.map((m) => ({ id: m, name: short(m), eff: Math.round((eff[m] || 0) * 10) / 10, pct: clamp01((eff[m] || 0) / hi), label: statusOf(eff[m] || 0), role: 'target' })),
+    ...Object.entries(eff).filter(([m, e]) => !target.includes(m) && e >= 1).sort((a, b) => b[1] - a[1])
+      .map(([m, e]) => ({ id: m, name: short(m), eff: Math.round(e * 10) / 10, pct: clamp01(e / hi), label: onFocusSet.has(m) ? 'Support' : 'Off-focus', role: onFocusSet.has(m) ? 'support' : 'off' })),
+  ];
 
   // ── Explanation ──
+  const fname = split.name.toLowerCase();
   const positives = [];
   const improvements = [];
-  const coveredGroups = coverage.filter((c) => c.expected && c.eff >= 3).map((c) => c.name.toLowerCase());
-  if (coveredGroups.length) positives.push(`${cap(listJoin(coveredGroups.slice(0, 3)))} covered`);
-  const goodPair = pairNotes.find((p) => p.inWorkout && p.score >= 0.9);
-  if (goodPair) positives.push(`Strong ${goodPair.pair.aName}/${goodPair.pair.bName} balance`);
+  const good = target.filter((m) => tScore[m] >= 0.85);
+  if (good.length === target.length) positives.push(target.length === 1 ? `${short(target[0])} gets a full dose (${Math.round(eff[target[0]])} sets)` : `Every target muscle is covered`);
+  else if (good.length) positives.push(`${cap(listJoin(good.map(lower)))} covered`);
+  if (C.focus >= 0.95 && totalEff > 0) positives.push(`Stays on focus — ${Math.round((1 - offShare) * 100)}% of the work hits ${fname} muscles`);
+  const goodPair = pairNotes.find((p) => p.score >= 0.95 && Math.min(p.A, p.B) >= 2);
+  if (goodPair) positives.push(`Good ${listJoin(goodPair.a.map(lower))} / ${listJoin(goodPair.b.map(lower))} balance`);
   if (C.volume >= 0.9) positives.push(`Reasonable volume (${totalSets} sets)`);
   if (C.variety >= 0.8 && C.redundancy >= 0.9 && C.progression >= 0.9) positives.push('Good exercise selection');
   if (C.duration >= 0.95) positives.push(`Fits your ${targetMinutes}-minute target`);
-  if (C.recovery === 1 && progress && Object.values(progress.muscles).some((m) => m.lastTrained)) positives.push('Targets recovered muscles');
+  if (C.recovery === 1 && progress && Object.values(progress.muscles).some((m) => m.lastTrained)) positives.push('Target muscles are recovered');
 
-  const missing = info.expect.filter((m) => expectScores[m] < 0.35);
-  const low = info.expect.filter((m) => expectScores[m] >= 0.35 && expectScores[m] < 0.75 && (eff[m] || 0) < lo);
-  const high = info.expect.filter((m) => (eff[m] || 0) > hi && (eff[m] || 0) <= 12);
-  if (missing.length) improvements.push({ kind: 'add', text: `Add ${listJoin(missing.map((m) => MUSCLE_BY_ID[m].short.toLowerCase()))} work` });
-  if (low.length) improvements.push({ kind: 'warn', text: `${cap(listJoin(low.map((m) => MUSCLE_BY_ID[m].short.toLowerCase())))} volume is slightly low` });
-  for (const p of pairNotes.filter((x) => x.score < 0.7)) {
-    const heavy = p.A > p.B ? p.pair.aName : p.pair.bName;
-    const light = p.A > p.B ? p.pair.bName : p.pair.aName;
-    improvements.push({ kind: 'warn', text: info.split ? `This week favours ${heavy} — balance it with some ${light} work` : `${cap(heavy)} outweighs ${light} — add some ${light} work` });
+  const why = auto ? '' : ` — part of ${an(fname)} workout`;
+  if (missing.length) improvements.push({ kind: 'add', text: `Add ${listJoin(missing.map(lower))} work${why}` });
+  const low = target.filter((m) => !missing.includes(m) && (eff[m] || 0) < lo);
+  if (low.length) improvements.push({ kind: 'warn', text: `${cap(listJoin(low.map(lower)))}: ${low.length === 1 ? `${Math.round((eff[low[0]] || 0) * 10) / 10} sets — aim for ${lo}–${hi}` : `below the ${lo}–${hi} set range`}` });
+  const high = target.filter((m) => (eff[m] || 0) > hi);
+  if (high.length) improvements.push({ kind: 'warn', text: `${cap(listJoin(high.map(lower)))}: more than ${hi} sets in one session — extra sets add fatigue, not results` });
+  if (offExercises.length && C.focus < 0.95) {
+    improvements.push({ kind: 'warn', text: `${listJoin(offExercises.slice(0, 2).map((e) => e.name))}${offExercises.length > 2 ? '…' : ''} ${offExercises.length === 1 ? "doesn't" : "don't"} fit ${an(fname)} workout (${Math.round(offShare * 100)}% of the work is off-focus)` });
+  }
+  for (const p of pairNotes.filter((x) => x.score < 0.75)) {
+    const [lowSide, highSide] = p.A < p.B ? [p.a, p.b] : [p.b, p.a];
+    improvements.push({ kind: 'add', text: `${cap(listJoin(lowSide.map(lower)))} volume is low next to ${listJoin(highSide.map(lower))}` });
   }
   if (r > 1.3) improvements.push({ kind: 'warn', text: `${totalSets} sets is a lot for ${targetMinutes} minutes — fewer, harder sets will serve you better` });
   else if (r < 0.55) improvements.push({ kind: 'add', text: 'Add a few more sets for a productive session' });
-  if (high.length) improvements.push({ kind: 'warn', text: `${cap(listJoin(high.map((m) => MUSCLE_BY_ID[m].short.toLowerCase())))} volume is high for one session — ${lo}–${hi} hard sets is plenty` });
-  if (excessive.length) improvements.push({ kind: 'warn', text: `${cap(listJoin(excessive.map((m) => MUSCLE_BY_ID[m].short.toLowerCase())))}: far past useful volume for one session` });
-  const worst = redundant.filter((g) => g.length >= 3).sort((a, b) => b.length - a.length)[0];
-  if (worst) improvements.push({ kind: 'warn', text: `${worst.length} exercises do the same job (${listJoin(worst.slice(0, 3).map((e) => e.name))}${worst.length > 3 ? '…' : ''}) — swap some for different movements` });
+  const worst = redundant.sort((a, b) => b.length - a.length)[0];
+  if (worst) improvements.push({ kind: 'warn', text: `${worst.length} exercises do the same job (${listJoin(worst.slice(0, 3).map((e) => e.name))}) — swap one for a different angle` });
   if (dupIds) improvements.push({ kind: 'warn', text: 'The same exercise appears more than once — add sets instead' });
   if (C.duration < 0.95) {
     improvements.push(dr > 1
@@ -308,10 +301,11 @@ export function rateWorkout(items, ctx = {}) {
   }
   for (const n of progNotes.slice(0, 2)) improvements.push({ kind: 'warn', text: n });
 
-  // ── Suggested addition (optional, never forced) ──
+  // ── Suggested addition: only target muscles, only on-focus exercises ──
   let suggestion = null;
-  const needs = info.expect
-    .map((m) => ({ m, need: SIZE_WEIGHT[MUSCLE_BY_ID[m].size] * (1 - expectScores[m]) }))
+  const balanceNeeds = pairNotes.filter((p) => p.score < 0.75).flatMap((p) => (p.A < p.B ? p.a : p.b));
+  const needs = target
+    .map((m) => ({ m, need: SIZE_WEIGHT[MUSCLE_BY_ID[m].size] * (1 - tScore[m]) + (balanceNeeds.includes(m) ? 0.3 : 0) }))
     .filter((n) => n.need > 0.2)
     .sort((a, b) => b.need - a.need);
   if (needs.length && r <= 1.3) {
@@ -320,18 +314,19 @@ export function rateWorkout(items, ctx = {}) {
     patterns.forEach((p) => { patternCount[p] = (patternCount[p] || 0) + 1; });
     for (const { m } of needs) {
       const candidates = EXERCISES.filter((e) =>
-        e.primary.includes(m) && !inWorkout.has(e.id) && (patternCount[e.pattern] || 0) < 2 &&
+        e.primary.includes(m) && e.primary.every((p) => onFocusSet.has(p)) && !inWorkout.has(e.id) &&
+        (patternCount[e.pattern] || 0) < allowed + (focused ? 0 : 1) &&
         (!ctx.caps || isAvailable(e, ctx.caps)) && !(experience === 'beginner' && e.difficulty === 3));
       if (!candidates.length) continue;
       const scoreC = (e) => {
         const used = progress?.exercises?.[e.id]?.sessions.length || 0;
-        return used * 2 + (e.primary.length === 1 ? 1 : 0) - e.difficulty * 0.5 + (e.primary[0] === m ? 1 : 0);
+        return used * 2 + (e.primary[0] === m ? 1.5 : 0) + (e.primary.length === 1 ? 0.5 : 0) - e.difficulty * 0.5 - (patternCount[e.pattern] ? 1 : 0);
       };
       const pick = candidates.sort((a, b) => scoreC(b) - scoreC(a))[0];
       suggestion = {
         exerciseId: pick.id, muscle: m,
         sets: r > 1 ? 2 : 3, repMin: pick.reps[0], repMax: pick.reps[1],
-        reason: expectScores[m] === 0 ? `${MUSCLE_BY_ID[m].short} aren't trained yet` : `More ${MUSCLE_BY_ID[m].short.toLowerCase()} work`,
+        reason: !(eff[m] > 0) ? `${short(m)} aren't trained yet` : `More ${lower(m)} work`,
       };
       break;
     }
@@ -344,18 +339,16 @@ export function rateWorkout(items, ctx = {}) {
   else if (score >= 55) { grade = 'fair'; label = 'Fair'; }
   else { grade = 'weak'; label = 'Needs work'; }
 
-  const tName = info.name.toLowerCase();
   let headline;
-  if (score >= 90) headline = `Excellent ${tName} workout for your equipment.`;
-  else if (score >= 80) headline = goodPair && type === 'upper' ? 'Good upper-body balance.' : `Good ${tName} workout.`;
-  else if (score >= 70) headline = `Solid ${tName} workout with room to improve.`;
-  else if (score >= 55) headline = 'A decent start — a few tweaks will make this much better.';
-  else headline = totalSets < 4 ? 'Too little work to be a full session yet.' : 'This workout needs restructuring.';
+  if (score >= 90) headline = `Excellent ${fname} workout for your equipment.`;
+  else if (score >= 80) headline = `Good ${fname} workout.`;
+  else if (score >= 70) headline = `Solid ${fname} workout with room to improve.`;
+  else if (score >= 55) headline = `A decent start on ${an(fname)} workout — a few tweaks will make it much better.`;
+  else headline = totalSets < 4 ? 'Too little work to be a full session yet.' : `This doesn't work well as a ${fname} workout yet.`;
 
   return {
-    score, grade, label, type, typeName: info.name, headline,
-    positives, improvements: improvements.slice(0, 5), warnings, coverage, components: C,
-    suggestion, estimatedMinutes, totalSets, muscleEff: eff, targetMinutes,
-    improvementsAll: improvements,
+    score, grade, label, split: splitInfo, typeName: split.name, headline,
+    positives, improvements: improvements.slice(0, 5), improvementsAll: improvements, warnings, coverage, components: C,
+    suggestion, estimatedMinutes, totalSets, muscleEff: eff, targetMinutes, dose: [lo, hi], offShare,
   };
 }
