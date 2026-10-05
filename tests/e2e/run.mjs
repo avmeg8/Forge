@@ -90,7 +90,7 @@ await step('builder: create, name, add exercises, live rating', async () => {
   assert.ok(r.suggestion, 'expects a suggestion');
   await S('#analysis').scrollIntoViewIfNeeded();
   await shot('04-analysis');
-  assert.ok(await S('#analysis >> text=Muscle coverage').count());
+  assert.ok(await S('#analysis >> text=Target muscles').count());
 });
 
 await step('builder: suggested addition raises the rating', async () => {
@@ -124,6 +124,24 @@ await step('builder: reorder, edit sets, remove + undo', async () => {
   await tap('.wx-body [data-action="b-down"]');
   now = await state(() => FORGE.store.state.templates[0].items.map((i) => i.exerciseId));
   assert.equal(now[0], ids[0]);
+});
+
+await step('builder: workout focus — pick a split and the rating follows it', async () => {
+  const before = await state(() => { const t = FORGE.store.state.templates[0]; return FORGE.store.rateTemplate(t).split; });
+  assert.equal(before.auto, true);
+  await tap('[data-action="b-focus"]');
+  await S('.sheet >> text=Workout focus').first().waitFor();
+  await tap('.sheet [data-action="f-pick"][data-v="chest_back"]');
+  await shot('04b-focus-sheet');
+  await tap('.sheet [data-action="close-sheet"]');
+  const r = await state(() => { const t = FORGE.store.state.templates[0]; return { focus: t.focus, split: FORGE.store.rateTemplate(t).split.name }; });
+  assert.equal(r.focus, 'chest_back');
+  assert.equal(r.split, 'Chest & Back');
+  assert.ok(await S('#analysis >> text=Chest & Back').count());
+  // back to automatic for the rest of the run
+  await tap('[data-action="b-focus"]');
+  await tap('.sheet [data-action="f-pick"][data-v="auto"]');
+  await tap('.sheet [data-action="close-sheet"]');
 });
 
 await step('session: start, log sets, rest timer (+30 / skip), XP flows to muscles', async () => {
@@ -242,6 +260,20 @@ await step('progress: sorting muscle list', async () => {
   await wait();
   const first = await S('.mlevel .name').first().innerText();
   assert.ok(first.length > 0);
+});
+
+await step('weekly plan: rates the saved workouts together', async () => {
+  await page.goto(`${BASE}#/workouts`);
+  await S('[data-href="#/plan"]').first().click();
+  await S('text=Weekly sets per muscle').waitFor();
+  const p = await state(() => FORGE.store.plan);
+  assert.ok(p.score > 0 && p.muscles.length === 18);
+  await shot('12b-plan');
+  const id = await state(() => FORGE.store.planTemplates[0].id);
+  await S(`[data-action="pl-toggle"][data-id="${id}"]`).click();
+  await wait(200);
+  assert.equal(await state(() => FORGE.store.template(FORGE.store.state.templates.find((t) => t.inPlan === false)?.id)?.inPlan), false);
+  await S(`[data-action="pl-toggle"][data-id="${id}"]`).click();
 });
 
 await step('history: list and open a workout', async () => {
