@@ -38,7 +38,7 @@ page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
 const S = (sel) => page.locator(sel);
-const state = (fn) => page.evaluate(fn);
+const state = (fn, arg) => page.evaluate(fn, arg);
 const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
 const wait = (ms = 150) => page.waitForTimeout(ms);
 const tap = async (sel) => { await S(sel).first().click(); await wait(); };
@@ -320,6 +320,210 @@ await step('equipment: adding a bench unlocks exercises; locked view shows requi
   assert.ok(xp > 0);
 });
 
+
+/* ───────────── v1.3 features ───────────── */
+// a fake forge_sync endpoint (same semantics as the Postgres function) so tests never touch the real cloud
+const cloud = new Map();
+let cloudSeq = 0;
+async function fakeCloud(route) {
+  const { p_key, p_since, p_records } = JSON.parse(route.request().postData() || '{}');
+  const rows = cloud.get(p_key) || new Map();
+  cloud.set(p_key, rows);
+  for (const r of p_records || []) {
+    const k = `${r.store}|${r.id}`;
+    const cur = rows.get(k);
+    if (!cur || cur.updatedAt < r.updatedAt) rows.set(k, { ...r, deleted: !!r.deleted, seq: ++cloudSeq });
+  }
+  const out = [...rows.values()].filter((r) => r.seq > (p_since || 0)).sort((a, b) => a.seq - b.seq);
+  await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ records: out, seq: out.length ? out[out.length - 1].seq : p_since || 0, more: false }) });
+}
+await context.route('**/rest/v1/rpc/forge_sync', fakeCloud);
+
+await step('build it for me: generator creates a well-rated workout for a focus', async () => {
+  await page.goto(`${BASE}#/workouts`);
+  await wait(200);
+  await tap('[data-action="w-gen"]');
+  await S('.sheet .gen-preview').waitFor();
+  await tap('.sheet [data-action="g-focus"][data-v="pull"]');
+  await tap('.sheet [data-action="g-min"][data-v="30"]');
+  const before = await S('.sheet .gen-list').innerText();
+  await shot('20-generator');
+  await tap('.sheet [data-action="g-shuffle"]');
+  await tap('.sheet [data-action="g-use"]');
+  await S('#b-name').waitFor();
+  const t = await state(() => { const t = FORGE.store.state.templates.at(-1); return { name: t.name, n: t.items.length, focus: t.focus, score: FORGE.store.rateTemplate(t).score, min: t.targetMinutes }; });
+  assert.equal(t.focus, 'pull');
+  assert.equal(t.min, 30);
+  assert.ok(t.n >= 2, `items: ${t.n}`);
+  assert.ok(t.score >= 75, `score ${t.score}`);
+  assert.ok(before.length > 0);
+  await shot('21-generated-builder');
+});
+
+await step('supersets: link two exercises, session alternates without rest between them', async () => {
+  const id = await state(() => FORGE.store.state.templates.at(-1).id);
+  await page.goto(`${BASE}#/builder/${id}`);
+  await wait(200);
+  await S('[data-action="b-toggle"]').first().click();
+  await wait(150);
+  await tap('[data-action="b-link"]');
+  await S('.ss-block').first().waitFor();
+  assert.match(await S('.ss-head').first().innerText(), /SUPERSET A/i);
+  await shot('22-builder-superset');
+  const first = await state(() => FORGE.store.state.templates.at(-1).items.slice(0, 2).map((i) => i.group));
+  assert.ok(first[0] && first[0] === first[1]);
+  await tap('[data-action="b-start"]');
+  await S('.ss-pill').waitFor();
+  const ex0 = await S('.ex-title').innerText();
+  // log until the first exercise's set is done (unilateral → L+R)
+  for (let k = 0; k < 2; k++) {
+    if (await S('.rest').count()) break;
+    const cur = await state(() => FORGE.store.state.active.current);
+    if (cur !== 0) break;
+    await tap('[data-action="s-log"]');
+  }
+  const after = await state(() => ({ cur: FORGE.store.state.active.current, rest: !!FORGE.store.state.active.rest }));
+  assert.equal(after.cur, 1, 'moved to the second exercise of the superset');
+  assert.equal(after.rest, false, 'no rest inside a superset');
+  assert.notEqual(await S('.ex-title').innerText(), ex0);
+  await shot('23-session-superset');
+});
+
+await step('warm-up sets: logged separately, no XP, working sets unchanged', async () => {
+  // jump to an exercise with a dumbbell and no sets yet
+  const idx = await state(() => {
+    const a = FORGE.store.state.active;
+    return a.items.findIndex((it, i) => FORGE.store.cfgFor(it.exerciseId) && !a.sets.some((s) => s.itemIndex === i));
+  });
+  assert.ok(idx >= 0, 'has a fresh dumbbell exercise');
+  await state((i) => FORGE.store.updateActive((a) => { a.current = i; a.rest = null; }), idx);
+  await wait(200);
+  if (!(await S('[data-action="s-warmup"]').count())) {
+    // unilateral exercises have no warm-up button — fine; check a bilateral one instead
+    const j = await state(() => FORGE.store.state.active.items.findIndex((it) => FORGE.store.cfgFor(it.exerciseId) && !window.FORGE.store.state.active.sets.some((s) => s.exerciseId === it.exerciseId)));
+    assert.ok(j >= 0);
+  }
+  if (!(await S('[data-action="s-warmup"]').count())) {
+    const dbg = await state(() => { const a = FORGE.store.state.active; return { cur: a.current, item: a.items[a.current], drafts: a.drafts, screen: document.querySelector('main')?.dataset.screen, html: document.querySelector('.log-block')?.outerHTML?.slice(0, 600) }; });
+    console.log(JSON.stringify(dbg, null, 1));
+  }
+  await S('[data-action="s-warmup"]').waitFor({ timeout: 4000 });
+  const before = await state(() => FORGE.store.state.active.sets.filter((s) => !s.warmup).length);
+  await tap('[data-action="s-warmup"]');
+  await S('.logged-row--wu').waitFor();
+  const a = await state(() => { const a = FORGE.store.state.active; const w = a.sets.find((s) => s.warmup); return { work: a.sets.filter((s) => !s.warmup).length, xp: FORGE.store.liveProgress.sessions[a.id].setXp[w.id] }; });
+  assert.equal(a.work, before);
+  assert.equal(a.xp, 0);
+  assert.match(await S('.sess-progress').getAttribute('aria-label'), /^\d+ of/);
+  await shot('24-session-warmup');
+  await state(() => FORGE.store.discardSession());
+});
+
+await step('weekly schedule: pin a workout to today → Home shows it', async () => {
+  await page.goto(`${BASE}#/plan`);
+  await S('.sched-row').first().waitFor();
+  assert.equal(await S('.sched-row').count(), 7);
+  const today = await state(() => new Date().getDay());
+  const tid = await state(() => FORGE.store.state.templates[0].id);
+  await S(`select[data-d="${today}"]`).selectOption(tid);
+  await wait(250);
+  const tomorrow = (today + 1) % 7;
+  await S(`select[data-d="${tomorrow}"]`).selectOption(tid);
+  await wait(250);
+  const p = await state(() => FORGE.store.plan);
+  assert.equal(p.scheduled, true);
+  assert.equal(p.days, 2);
+  assert.ok(p.clashes.length >= 1, 'same workout two days in a row is flagged');
+  await shot('25-plan-schedule');
+  await page.goto(`${BASE}#/`);
+  await wait(250);
+  const name = await state(() => FORGE.store.state.templates[0].name);
+  assert.match(await S('.hero').innerText(), new RegExp(name.replace(/[()]/g, '.')));
+  await shot('26-home-scheduled');
+  await state(() => FORGE.store.saveSettings({ schedule: {} }));
+});
+
+await step('deload week: suggested on Home, lighter session when active', async () => {
+  // pretend 5 earlier training weeks
+  await state(async () => {
+    const s = FORGE.store.done[0];
+    for (let k = 1; k <= 5; k++) {
+      const copy = structuredClone(s);
+      copy.id = `deload-seed-${k}`;
+      copy.startedAt -= k * 7 * 86400000; copy.endedAt -= k * 7 * 86400000;
+      copy.sets.forEach((x) => { x.ts -= k * 7 * 86400000; });
+      FORGE.store.state.sessions.push(copy);
+      await FORGE.store.repo.saveSession(copy);
+    }
+    FORGE.store.emit();
+  });
+  await page.goto(`${BASE}#/`);
+  await S('[data-action="h-deload-start"]').waitFor();
+  await shot('27-home-deload');
+  await tap('[data-action="h-deload-start"]');
+  await S('[data-action="h-deload-end"]').waitFor();
+  const t = await state(() => FORGE.store.state.templates[0]);
+  await state((id) => FORGE.shared.startTemplate(FORGE, id), t.id);
+  await S('.deload-pill').waitFor();
+  const sets = await state(() => FORGE.store.state.active.items.map((i) => [i.sets, i.plannedSets]));
+  assert.ok(sets.every(([s, p]) => s < p || p === 1), JSON.stringify(sets));
+  await state(() => FORGE.store.discardSession());
+  await state(async () => {
+    for (let k = 1; k <= 5; k++) await FORGE.store.deleteSession(`deload-seed-${k}`);
+    await FORGE.store.endDeload();
+    await FORGE.store.saveSettings({ deloadLast: null });
+  });
+});
+
+await step('body weight: log and see it on Progress', async () => {
+  await page.goto(`${BASE}#/progress`);
+  await tap('[data-action="p-bw"]');
+  await S('#bw-input').fill('80.6');
+  await tap('.sheet [data-action="bw-save"]');
+  await S('#bw-input').fill('80.2');
+  await tap('.sheet [data-action="bw-save"]');
+  await tap('.sheet [data-action="close-sheet"], .sheet-close');
+  await page.keyboard.press('Escape');
+  await wait(200);
+  const m = await state(() => FORGE.store.measures.map((x) => x.kg));
+  assert.deepEqual(m, [80.6, 80.2]);
+  assert.match(await page.locator('main').innerText(), /80\.2/);
+  await S('text=Body weight').first().scrollIntoViewIfNeeded();
+  await shot('28-progress-bodyweight');
+});
+
+await step('cloud backup: turn on, key shown, restore on a second phone', async () => {
+  await page.goto(`${BASE}#/settings`);
+  await S('#backup').scrollIntoViewIfNeeded();
+  assert.match(await S('#backup').innerText(), /Cloud backup is off/);
+  await tap('[data-action="bk-on"]');
+  await S('.backup-key').waitFor();
+  const key = (await S('.backup-key').innerText()).replace(/\s/g, '');
+  assert.match(key, /^[0-9A-Z]{5}(-[0-9A-Z]{5}){4}$/);
+  await shot('29-backup-key');
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => FORGE.store.syncStatus.state === 'ok', null, { timeout: 5000 });
+  await wait(200);
+  assert.match(await S('#backup').innerText(), /Backed up/);
+  await shot('30-settings-backup');
+  const mine = await state(() => ({ t: FORGE.store.state.templates.length, s: FORGE.store.done.length }));
+
+  // second phone: fresh browser profile
+  const ctx2 = await browser.newContext({ viewport: { width: 360, height: 780 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+  await ctx2.route('**/rest/v1/rpc/forge_sync', fakeCloud);
+  const p2 = await ctx2.newPage();
+  await p2.goto(BASE);
+  await p2.locator('[data-action="onb-restore"]').click();
+  await p2.locator('#bk-input').fill(key.toLowerCase().replace(/-/g, ' '));
+  await p2.locator('.sheet [data-action="bk-go"]').click();
+  await p2.waitForFunction(() => FORGE.store.settings.onboarded && location.hash.startsWith('#/'), null, { timeout: 5000 });
+  await p2.waitForTimeout(300);
+  const theirs = await p2.evaluate(() => ({ t: FORGE.store.state.templates.length, s: FORGE.store.done.length, sync: FORGE.store.sync.enabled }));
+  assert.deepEqual(theirs, { ...mine, sync: true });
+  await p2.screenshot({ path: join(SHOTS, '31-restored-home.png') });
+  await ctx2.close();
+});
+
 await step('persistence: reload keeps workouts, history and settings', async () => {
   await page.reload();
   await wait(600);
@@ -353,7 +557,7 @@ await step('offline: app loads and works with no network', async () => {
 });
 
 await step('narrow Android widths: no horizontal scrolling (320/360/390/412)', async () => {
-  const routes = ['#/', '#/workouts', '#/workouts?tab=history', '#/progress', '#/exercises', '#/settings', `#/exercise/db_floor_press`];
+  const routes = ['#/', '#/workouts', '#/workouts?tab=history', '#/progress', '#/exercises', '#/settings', '#/plan', `#/exercise/db_floor_press`];
   const tplId = await state(() => FORGE.store.state.templates[0].id);
   routes.push(`#/builder/${tplId}`);
   const bad = [];
