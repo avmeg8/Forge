@@ -79,3 +79,10 @@ export function weightLabel(w) {
 }
 
 export const SAFETY_TEXT = 'Exercise always carries some risk. Warm up, use a weight you can control, and stop if something hurts. FORGE does not give medical advice.';
+
+/** Animated "how to" demo placeholder — the player in components/demo.js brings it to life. */
+export function demo(ex, { cls = '', open = false, caption = true } = {}) {
+  return `<div class="demo ${cls}" data-demo="${ex.id}" data-label="Animation: how to do ${esc(ex.name)}" ${open ? 'data-tap="open" data-action="s-info" role="button" tabindex="0" aria-label="How to do ' + esc(ex.name) + '"' : 'title="Tap to pause or play"'}>
+    ${caption ? `<span class="demo-badge">${ex.unilateral ? 'One side shown · repeat on the other' : 'Demo'}</span><span class="demo-play" aria-hidden="true">▶</span>` : ''}
+  </div>`;
+}
