@@ -15,9 +15,9 @@
  * `id` + `updatedAt` for exactly this purpose). No screen code needs to change.
  */
 
-export const STORES = ['meta', 'templates', 'sessions'];
+export const STORES = ['meta', 'templates', 'sessions', 'measures', 'outbox'];
 const DB_NAME = 'forge';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export class IndexedDBAdapter {
   constructor(name = DB_NAME) {
