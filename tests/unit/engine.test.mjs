@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { levelInfo, levelCost, THRESHOLDS, MAX_LEVEL } from '../../src/engine/levels.js';
 import { computeProgress, setScore, intensityFactor } from '../../src/engine/xp.js';
 import { computeStreak } from '../../src/engine/streak.js';
-import { rateWorkout } from '../../src/engine/rating.js';
+import { rateWorkout, detectSplit } from '../../src/engine/rating.js';
+import { ratePlan } from '../../src/engine/plan.js';
 import { recommend, sideBalance } from '../../src/engine/progression.js';
 import { capabilities, isAvailable, snapWeight, weightSteps, unlockSuggestions, loadConfig, nextWeightUp } from '../../src/engine/equipment.js';
 import { recoveryStatus } from '../../src/engine/recovery.js';
@@ -161,7 +162,7 @@ const it = (exerciseId, sets = 3) => ({ exerciseId, sets, repMin: EXERCISE_BY_ID
 test('rating: balanced 4-exercise upper workout is good and suggests delt work', () => {
   const r = rateWorkout([it('db_floor_press'), it('one_arm_row'), it('hammer_curl'), it('one_arm_oh_extension')], { settings: { experience: 'beginner' }, caps, targetMinutes: 45 });
   assert.ok(r.score >= 78 && r.score <= 88, String(r.score));
-  assert.equal(r.type, 'upper');
+  assert.equal(r.split.id, 'upper');
   assert.equal(EXERCISE_BY_ID[r.suggestion.exerciseId].primary.includes('side_delts'), true);
 });
 
@@ -258,4 +259,55 @@ test('recovery: trained yesterday with real volume → limited', () => {
 test('setScore uses e1RM for loaded sets', () => {
   assert.equal(setScore(EXERCISE_BY_ID.db_floor_press, { weight: 30, reps: 1 }), 30);
   assert.equal(setScore(EXERCISE_BY_ID.db_floor_press, { weight: 30, reps: 0 }), 0);
+});
+
+// ───────────────────────── Splits & weekly plan ─────────────────────────
+const chestDay = () => [it('db_floor_press', 4), it('db_squeeze_press'), it('push_up'), it('db_floor_fly')];
+test('split: a focused chest day is rated as a chest day, not penalised for missing legs/back', () => {
+  const r = rateWorkout(chestDay(), { settings: { experience: 'intermediate' }, caps, focus: 'chest' });
+  assert.equal(r.split.id, 'chest');
+  assert.ok(r.score >= 85, String(r.score));
+  assert.ok(!r.improvements.some((i) => /back|legs|quads/i.test(i.text)));
+});
+
+test('split: auto-detects common splits', () => {
+  assert.equal(detectSplit(chestDay()), 'chest');
+  assert.equal(detectSplit([it('db_floor_press', 4), it('one_arm_shoulder_press'), it('lateral_raise'), it('one_arm_oh_extension')]), 'push');
+  assert.equal(detectSplit([it('one_arm_row', 4), it('rear_delt_row'), it('db_curl'), it('hammer_curl')]), 'back_biceps');
+  assert.equal(detectSplit([it('goblet_squat', 4), it('db_rdl', 4), it('reverse_lunge'), it('single_leg_calf_raise')]), 'legs');
+  assert.equal(detectSplit([it('db_curl'), it('hammer_curl'), it('one_arm_oh_extension'), it('triceps_kickback')]), 'arms');
+  assert.equal(detectSplit([it('db_floor_press'), it('one_arm_row'), it('hammer_curl'), it('one_arm_oh_extension')]), 'upper');
+});
+
+test('split: off-focus work is penalised and suggestions stay on focus', () => {
+  const onFocus = rateWorkout(chestDay(), { settings: {}, caps, focus: 'chest' });
+  const mixed = rateWorkout([it('db_floor_press', 4), it('db_squeeze_press'), it('goblet_squat'), it('db_rdl')], { settings: {}, caps, focus: 'chest' });
+  assert.ok(mixed.score < onFocus.score - 20, `${mixed.score} vs ${onFocus.score}`);
+  assert.ok(mixed.improvements.some((i) => /off-focus/.test(i.text)));
+  const push = rateWorkout([it('db_floor_press', 4), it('push_up'), it('one_arm_oh_extension')], { settings: {}, caps, focus: 'push' });
+  assert.ok(push.suggestion);
+  assert.ok(EXERCISE_BY_ID[push.suggestion.exerciseId].primary.includes('side_delts'));
+});
+
+test('split: custom focus judges only the chosen muscles', () => {
+  const r = rateWorkout([it('db_curl', 4), it('hammer_curl', 3)], { settings: {}, caps, focus: 'custom', customMuscles: ['biceps'] });
+  assert.equal(r.split.id, 'custom');
+  assert.ok(r.score >= 75, String(r.score));
+});
+
+test('weekly plan: Push/Pull/Legs beats a push-only week, and more days help', () => {
+  const T = (name, items) => ({ id: name, name, items, targetMinutes: 45, focus: 'auto' });
+  const rt = (t) => rateWorkout(t.items, { settings: { experience: 'intermediate' }, caps, targetMinutes: 45, focus: t.focus });
+  const ppl = [
+    T('Push', [it('db_floor_press', 4), it('one_arm_shoulder_press'), it('lateral_raise'), it('one_arm_oh_extension')]),
+    T('Pull', [it('one_arm_row', 4), it('rear_delt_row'), it('db_curl'), it('hammer_curl')]),
+    T('Legs', [it('goblet_squat', 4), it('db_rdl', 4), it('reverse_lunge'), it('single_leg_calf_raise')]),
+  ];
+  const s = (f) => ({ settings: { experience: 'intermediate', frequency: f }, rateTemplate: rt });
+  const p3 = ratePlan(ppl, s('2-3'));
+  const p5 = ratePlan(ppl, s('5'));
+  const pushOnly = ratePlan([ppl[0]], s('4'));
+  assert.ok(p5.score > p3.score);
+  assert.ok(ratePlan(ppl, s('4')).score > pushOnly.score + 20);
+  assert.ok(pushOnly.improvements.some((i) => /Lats/.test(i.text)));
 });
