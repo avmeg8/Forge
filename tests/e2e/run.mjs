@@ -1,0 +1,339 @@
+/**
+ * End-to-end test of the whole connected system in a real (headless) Chromium,
+ * emulating an Android phone. Run with `npm run test:e2e` (needs `npm install`).
+ *
+ * Covers: onboarding, workout builder (add/remove/undo/reorder), live rating + suggestion,
+ * session logging, rest timer, left/right tracking, XP + levels, PR detection, streak,
+ * history, body map + muscle sheet + front/back, "Train <muscle>", equipment unlocks,
+ * persistence across reloads, offline mode via the service worker, PWA manifest/icons,
+ * and no horizontal scrolling at 320/360/390/412 px.
+ */
+import { chromium } from 'playwright';
+import { spawn } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import assert from 'node:assert/strict';
+
+const root = join(fileURLToPath(import.meta.url), '..', '..', '..');
+const PORT = 5199;
+const BASE = `http://localhost:${PORT}/`;
+const SHOTS = join(root, 'tests', 'e2e', 'screenshots');
+await mkdir(SHOTS, { recursive: true });
+
+const server = spawn(process.execPath, [join(root, 'scripts', 'serve.mjs')], { env: { ...process.env, PORT: String(PORT) }, stdio: 'pipe' });
+await new Promise((r) => server.stdout.once('data', r));
+
+const results = [];
+async function step(name, fn) {
+  try { await fn(); results.push(['✓', name]); console.log(`  ✓ ${name}`); }
+  catch (e) { results.push(['✗', name, e]); console.log(`  ✗ ${name}\n    ${e.message.split('\n').join('\n    ')}`); }
+}
+
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 360, height: 780 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, serviceWorkers: 'allow' });
+const page = await context.newPage();
+const errors = [];
+page.on('pageerror', (e) => errors.push(e.message));
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+
+const S = (sel) => page.locator(sel);
+const state = (fn) => page.evaluate(fn);
+const shot = (name) => page.screenshot({ path: join(SHOTS, `${name}.png`) });
+const wait = (ms = 150) => page.waitForTimeout(ms);
+const tap = async (sel) => { await S(sel).first().click(); await wait(); };
+
+console.log('FORGE E2E');
+await page.goto(BASE);
+await wait(500);
+
+await step('onboarding: experience, dumbbell range, frequency → welcome → home', async () => {
+  await tap('[data-action="onb-exp"][data-v="intermediate"]');
+  await S('[data-k="min"]').fill('2');
+  await S('[data-k="max"]').fill('30');
+  await S('[data-k="inc"]').fill('1');
+  await tap('[data-action="onb-freq"][data-v="4"]');
+  await shot('01-onboarding');
+  await tap('[data-action="onb-next"]');
+  await S('text=WELCOME TO').or(S('text=Welcome to')).first().waitFor();
+  await tap('[data-action="onb-start"]');
+  await S('text=Ready to train?').waitFor();
+  const s = await state(() => FORGE.store.settings);
+  assert.equal(s.onboarded, true);
+  assert.deepEqual(s.profiles[0].items.adjustable_dumbbell.load, { min: 2, max: 30, increment: 1 });
+  const lvls = await state(() => Object.values(FORGE.store.progress.muscles).map((m) => m.info.level));
+  assert.equal(lvls.length, 18);
+  assert.ok(lvls.every((l) => l === 1), 'everyone starts at level 1');
+  await shot('02-home-empty');
+});
+
+async function addExercise(name) {
+  await S('.sheet input[type="search"]').fill(name);
+  await wait(120);
+  await S(`.sheet [data-action="b-add"]:has-text("${name}")`).first().click();
+  await wait(150);
+}
+
+await step('builder: create, name, add exercises, live rating', async () => {
+  await tap('.nav a[href="#/workouts"]');
+  await tap('[data-action="w-new"]');
+  await S('#b-name').fill('My Upper Body');
+  await tap('[data-action="b-add-open"]');
+  for (const n of ['Dumbbell Floor Press', 'One-Arm Dumbbell Row', 'Hammer Curl', 'One-Arm Overhead Extension']) await addExercise(n);
+  await shot('03-add-sheet');
+  await tap('.sheet [data-action="close-sheet"]');
+  const t = await state(() => FORGE.store.state.templates[0]);
+  assert.equal(t.name, 'My Upper Body');
+  assert.equal(t.items.length, 4);
+  const r = await state(() => { const t = FORGE.store.state.templates[0]; return FORGE.store.rate(t.items, t.targetMinutes); });
+  assert.ok(r.score >= 70 && r.score <= 92, `score ${r.score}`);
+  assert.ok(r.suggestion, 'expects a suggestion');
+  await S('#analysis').scrollIntoViewIfNeeded();
+  await shot('04-analysis');
+  assert.ok(await S('#analysis >> text=Muscle coverage').count());
+});
+
+await step('builder: suggested addition raises the rating', async () => {
+  const before = await state(() => { const t = FORGE.store.state.templates[0]; return FORGE.store.rate(t.items, t.targetMinutes).score; });
+  await tap('[data-action="b-add-suggest"]');
+  const after = await state(() => { const t = FORGE.store.state.templates[0]; return FORGE.store.rate(t.items, t.targetMinutes).score; });
+  assert.ok(after > before, `${after} > ${before}`);
+});
+
+await step('builder: reorder, edit sets, remove + undo', async () => {
+  const ids = await state(() => FORGE.store.state.templates[0].items.map((i) => i.exerciseId));
+  await S('.wx').nth(1).locator('[data-action="b-toggle"]').first().click();
+  await wait();
+  await tap('.wx-body [data-action="b-up"]');
+  let now = await state(() => FORGE.store.state.templates[0].items.map((i) => i.exerciseId));
+  assert.equal(now[0], ids[1]);
+  assert.equal(now[1], ids[0]);
+  await tap('.wx-body [data-action="b-sets-inc"]');
+  assert.equal(await state(() => FORGE.store.state.templates[0].items[0].sets), 4);
+  await tap('.wx-body [data-action="b-sets-dec"]');
+  await tap('.wx-body [data-action="b-remove"]');
+  now = await state(() => FORGE.store.state.templates[0].items.length);
+  assert.equal(now, ids.length - 1);
+  await tap('.toast-action');
+  now = await state(() => FORGE.store.state.templates[0].items.map((i) => i.exerciseId));
+  assert.equal(now[0], ids[1], 'undo restores position');
+  // restore original order: move row back down
+  await S('.wx').first().locator('[data-action="b-toggle"]').first().click();
+  await wait();
+  if (!(await S('.wx-body').count())) { await S('.wx').first().locator('[data-action="b-toggle"]').first().click(); await wait(); }
+  await tap('.wx-body [data-action="b-down"]');
+  now = await state(() => FORGE.store.state.templates[0].items.map((i) => i.exerciseId));
+  assert.equal(now[0], ids[0]);
+});
+
+await step('session: start, log sets, rest timer (+30 / skip), XP flows to muscles', async () => {
+  await tap('[data-action="b-start"]');
+  await S('.ex-title').waitFor();
+  assert.equal(await S('.ex-title').innerText(), 'Dumbbell Floor Press');
+  await shot('05-session');
+  // set 1: default weight, bump reps to 10
+  const reps = Number(await S('.stepper[aria-label="reps"] .stepper-value').innerText());
+  for (let i = reps; i < 10; i++) await tap('[data-action="s-amt-inc"]');
+  await tap('[data-action="s-log"]');
+  await S('.rest').waitFor();
+  await shot('06-rest');
+  const t1 = await state(() => FORGE.store.state.active.rest.endsAt);
+  await tap('[data-action="s-rest-add"]');
+  const t2 = await state(() => FORGE.store.state.active.rest.endsAt);
+  assert.ok(t2 - t1 >= 29000, 'rest +30 s');
+  await tap('[data-action="s-rest-skip"]');
+  assert.equal(await S('.rest').count(), 0);
+  // sets 2 and 3 — next set is already prepared
+  for (let k = 0; k < 2; k++) { await tap('[data-action="s-log"]'); await tap('[data-action="s-rest-skip"]'); }
+  const live = await state(() => { const a = FORGE.store.state.active; const r = FORGE.store.liveProgress.sessions[a.id]; return { sets: a.sets.length, chest: r.xpByMuscle.chest, triceps: r.xpByMuscle.triceps }; });
+  assert.equal(live.sets, 3);
+  assert.ok(live.chest > live.triceps && live.triceps > 0, JSON.stringify(live));
+  assert.equal(await S('.ex-title').innerText(), 'One-Arm Dumbbell Row', 'auto-advances to next exercise');
+});
+
+await step('session: left/right tracking, no rest between sides, imbalance note', async () => {
+  assert.ok(await S('.side-pill span.on:has-text("LEFT")').count());
+  await tap('[data-action="s-log"]'); // left
+  assert.equal(await S('.rest').count(), 0, 'no rest between sides');
+  assert.ok(await S('.side-pill span.on:has-text("RIGHT")').count());
+  await tap('[data-action="s-amt-dec"]'); // right side one rep fewer
+  await tap('[data-action="s-log"]');
+  await tap('[data-action="s-rest-skip"]');
+  const note = await S('.balance-note').innerText();
+  assert.match(note, /Right side: 1 rep behind\./);
+  const sides = await state(() => FORGE.store.state.active.sets.filter((s) => s.exerciseId === 'one_arm_row').map((s) => s.side));
+  assert.deepEqual(sides, ['L', 'R']);
+  await shot('07-unilateral');
+});
+
+await step('session: finish early → summary with XP, level and next-time advice', async () => {
+  await tap('[data-action="s-finish"]');
+  await tap('.sheet [data-action="c-yes"]');
+  await S('text=Workout complete').waitFor();
+  await shot('08-summary');
+  assert.ok(await S('text=Next time').count());
+  const d = await state(() => ({ sessions: FORGE.store.done.length, chestXp: FORGE.store.progress.muscles.chest.xp, active: FORGE.store.state.active }));
+  assert.equal(d.sessions, 1);
+  assert.ok(d.chestXp > 0);
+  assert.equal(d.active, null);
+  await tap('[data-action="go"][data-href="#/"]');
+});
+
+await step('home: streak counts the training day; recent progress', async () => {
+  const st = await state(() => FORGE.store.streak);
+  assert.equal(st.streak, 1);
+  assert.equal(st.weekCount, 1);
+  assert.ok(await S('text=training day streak').count());
+  await shot('09-home-after');
+});
+
+await step('PR detection: beating last session announces a new PR', async () => {
+  // second workout: same template, one more rep on the floor press
+  await tap('[data-action="open-start"]');
+  await tap('.sheet [data-action="start-template"]');
+  await S('.ex-title').waitFor();
+  const prevReps = await state(() => FORGE.store.done[0].sets[0].reps);
+  const cur = Number(await S('.stepper[aria-label="reps"] .stepper-value').innerText());
+  for (let i = cur; i < prevReps + 2; i++) await tap('[data-action="s-amt-inc"]');
+  await tap('[data-action="s-log"]');
+  await S('.toast--pr').first().waitFor({ timeout: 3000 });
+  const txt = await S('.toast--pr').first().innerText();
+  assert.match(txt, /NEW (REP|STRENGTH) PR/);
+  await shot('10-pr');
+  await tap('[data-action="s-rest-skip"]');
+  await tap('[data-action="s-finish"]');
+  await tap('.sheet [data-action="c-yes"]');
+  await S('text=Workout complete').waitFor();
+  const prs = await state(() => FORGE.store.progress.prs.map((p) => p.type));
+  assert.ok(prs.includes('reps') || prs.includes('strength'), prs.join());
+});
+
+await step('progress: body map, modes, front/back toggle, muscle sheet', async () => {
+  await page.goto(`${BASE}#/progress`);
+  await S('#p-map .bodymap').waitFor();
+  const labels = await S('#p-map .bm-face--front .bm-muscle').evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
+  assert.equal(labels.length, 12);
+  assert.ok(labels.every((l) => /Level \d+/.test(l) && /XP/.test(l)), 'accessible labels');
+  await tap('[data-action="p-view"][data-v="back"]');
+  assert.equal(await S('#p-map .bodymap').getAttribute('data-view'), 'back');
+  await tap('[data-action="p-view"][data-v="front"]');
+  await tap('[data-action="p-mode"][data-v="recent"]');
+  await tap('[data-action="p-mode"][data-v="weekly"]');
+  await tap('[data-action="p-mode"][data-v="level"]');
+  await shot('11-progress');
+  await S('#p-map .bm-face--front .bm-muscle[data-muscle="chest"] path').first().click();
+  await S('.sheet.is-open').waitFor();
+  await wait(300);
+  assert.ok(await S('.sheet >> text=Recent performance').count());
+  assert.ok(await S('#p-map .bm-muscle.is-selected[data-muscle="chest"]').count(), 'highlighted');
+  await tap('.sheet [data-action="m-history"]');
+  assert.ok(await S('.sheet >> text=XP over time').count());
+  await shot('12-muscle-sheet');
+  await tap('.sheet [data-action="train-muscle"]');
+  await S('#b-name').waitFor();
+  assert.match(await S('#b-name').inputValue(), /Chest/);
+  const items = await state(() => FORGE.store.template(FORGE.route.id).items.map((i) => i.exerciseId));
+  assert.ok(items.length >= 2);
+});
+
+await step('progress: sorting muscle list', async () => {
+  await page.goto(`${BASE}#/progress`);
+  await S('[data-change="p-sort"]').selectOption('weakest');
+  await wait();
+  const first = await S('.mlevel .name').first().innerText();
+  assert.ok(first.length > 0);
+});
+
+await step('history: list and open a workout', async () => {
+  await page.goto(`${BASE}#/workouts?tab=history`);
+  await S('text=Today').first().waitFor();
+  assert.equal(await S('[data-href^="#/summary/"]').count(), 2);
+  await S('[data-href^="#/summary/"]').first().click();
+  await S('text=Sets').first().waitFor();
+});
+
+await step('equipment: adding a bench unlocks exercises; locked view shows requirement', async () => {
+  await page.goto(`${BASE}#/exercises`);
+  const before = await state(() => document.querySelectorAll('#x-results .item:not(.item--locked)').length);
+  await tap('[data-action="x-scope"][data-v="all"]');
+  assert.ok(await S('text=🔒 Requires: Bench').count());
+  await shot('13-library-all');
+  await S('.item--locked:has-text("Single-Arm Bench Press") [data-action="add-equipment"]').click();
+  await wait(300);
+  await tap('[data-action="x-scope"][data-v="available"]');
+  const after = await state(() => document.querySelectorAll('#x-results .item:not(.item--locked)').length);
+  assert.ok(after > before, `${after} > ${before}`);
+  // progression survives equipment changes: chest XP unchanged by adding equipment
+  const xp = await state(() => FORGE.store.progress.muscles.chest.xp);
+  assert.ok(xp > 0);
+});
+
+await step('persistence: reload keeps workouts, history and settings', async () => {
+  await page.reload();
+  await wait(600);
+  const d = await state(() => ({ t: FORGE.store.state.templates.length, s: FORGE.store.done.length, bench: !!FORGE.store.profile.items.bench }));
+  assert.ok(d.t >= 2);
+  assert.equal(d.s, 2);
+  assert.equal(d.bench, true);
+});
+
+await step('PWA: manifest, icons and service worker', async () => {
+  const m = await (await page.request.get(`${BASE}manifest.json`)).json();
+  assert.equal(m.display, 'standalone');
+  for (const ic of m.icons) assert.equal((await page.request.get(BASE + ic.src)).status(), 200, ic.src);
+  assert.ok(m.icons.some((i) => i.purpose === 'maskable'));
+  const sw = await page.evaluate(async () => { const r = await navigator.serviceWorker.ready; return !!r.active; });
+  assert.ok(sw);
+});
+
+await step('offline: app loads and works with no network', async () => {
+  await page.reload(); // ensure the page is controlled by the SW
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 5000 });
+  await context.setOffline(true);
+  await page.goto(`${BASE}#/progress`);
+  await S('#p-map .bodymap').waitFor({ timeout: 5000 });
+  await page.goto(`${BASE}#/exercises`);
+  await S('#x-results .item').first().waitFor();
+  await page.goto(`${BASE}#/workouts`);
+  await tap('[data-action="w-new"]');
+  await S('#b-name').waitFor();
+  await context.setOffline(false);
+});
+
+await step('narrow Android widths: no horizontal scrolling (320/360/390/412)', async () => {
+  const routes = ['#/', '#/workouts', '#/workouts?tab=history', '#/progress', '#/exercises', '#/settings', `#/exercise/db_floor_press`];
+  const tplId = await state(() => FORGE.store.state.templates[0].id);
+  routes.push(`#/builder/${tplId}`);
+  const bad = [];
+  for (const w of [320, 360, 390, 412]) {
+    await page.setViewportSize({ width: w, height: 760 });
+    for (const r of routes) {
+      await page.goto(BASE + r);
+      await wait(250);
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (over > 0) bad.push(`${w}px ${r} (+${over}px)`);
+    }
+    await page.goto(`${BASE}#/`);
+    await wait(200);
+    await shot(`14-home-${w}`);
+  }
+  // session screen at 320
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto(`${BASE}#/workouts`);
+  await tap('[data-action="start-template"]');
+  await S('.ex-title').waitFor();
+  const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  if (over > 0) bad.push(`320px session (+${over}px)`);
+  await shot('15-session-320');
+  assert.deepEqual(bad, []);
+});
+
+await step('no uncaught errors during the run', async () => {
+  assert.deepEqual(errors.filter((e) => !/Failed to load resource/.test(e)), []);
+});
+
+await browser.close();
+server.kill();
+const failed = results.filter((r) => r[0] === '✗');
+console.log(`\n${results.length - failed.length}/${results.length} passed`);
+process.exit(failed.length ? 1 : 0);
