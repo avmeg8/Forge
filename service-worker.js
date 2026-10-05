@@ -10,7 +10,7 @@
  *   the page reloads once.
  */
 // <precache>
-const VERSION = '1ae73f727e';
+const VERSION = 'd1ced0bed3';
 const APP_SHELL = [
   "./",
   "index.html",
@@ -42,6 +42,8 @@ const APP_SHELL = [
   "src/engine/recovery.js",
   "src/engine/session.js",
   "src/engine/streak.js",
+  "src/engine/swap.js",
+  "src/engine/weekly.js",
   "src/engine/xp.js",
   "src/main.js",
   "src/screens/backup.js",
@@ -57,6 +59,7 @@ const APP_SHELL = [
   "src/screens/settings.js",
   "src/screens/shared.js",
   "src/screens/summary.js",
+  "src/screens/week.js",
   "src/screens/workouts.js",
   "src/storage/adapters.js",
   "src/storage/repository.js",
